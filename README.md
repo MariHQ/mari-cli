@@ -1,6 +1,6 @@
 # Limpid
 
-Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 56 deterministic detector rules for AI-generated prose.
+Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 62 deterministic detector rules for AI-generated prose.
 
 > **Quick start:** From your project root, run `npx limpid install`, then run `/limpid init` inside your AI coding or writing tool. Full docs: [limpid.style](https://limpid.style).
 
@@ -12,9 +12,9 @@ Every model trained on the same internet, then got RLHF'd toward the same regist
 
 Limpid is a **design system for text**. It adds:
 
-- **One setup flow.** `/limpid init` writes `PRODUCT.md` and offers `STYLE.md`, so every later command knows the audience, register (docs / marketing / editorial / UX microcopy), voice, banned words, terminology, and which base style guide you write to (Microsoft, Google, AP, Chicago, plain language).
-- **21 commands.** A shared editorial vocabulary with your AI: `deslop`, `tighten`, `sharpen`, `clarify`, `critique`, `audit`, `polish`, and more.
-- **56 deterministic detector rules** plus an optional local ML pass. The CLI runs the deterministic rules with no model, no download, and no API key.
+- **One setup flow.** `/limpid init` writes `PRODUCT.md` and offers `STYLE.md` and `FACTS.md`, so every later command knows the audience, register (docs / marketing / editorial / UX microcopy), voice, banned words, terminology, the base style guide you write to (Microsoft, Google, AP, Chicago, plain language), and your ground-truth facts.
+- **21 commands.** A shared editorial vocabulary with your AI: `deslop`, `tighten`, `sharpen`, `clarify`, `critique`, `audit`, `polish`, `factcheck`, and more.
+- **A deterministic detector core** — regex, wordlist, density, and structural rules that run with no model, no download, and no API key — plus an **optional local ML layer** (BERT/GLiNER span extraction, perplexity) and a **grounding layer** that checks claims against your facts. Everything runs on-device.
 
 ## What's Included
 
@@ -58,6 +58,7 @@ All commands are accessed through `/limpid`:
 | `/limpid format` | Fix headings, lists, emphasis, and markdown structure |
 | `/limpid delight` | Add memorable, human touches |
 | `/limpid clarify` | Rewrite unclear or confusing copy |
+| `/limpid factcheck` | Check claims against your `FACTS.md` (or a `--source` doc); flag contradictions and unsupported claims |
 | `/limpid adapt` | Adapt a piece for a different channel (email, docs, social, UI) |
 | `/limpid localize` | Prepare copy for translation and global English |
 | `/limpid live` | In-place iteration: pick sentences in the editor, generate alternatives |
@@ -173,11 +174,11 @@ npx limpid ignores add-file "vendor/**"
 npx limpid ignores add-value overused-word delve --reason "Quoting a source"
 ```
 
-The detector catches **56 deterministic issues** across four families:
+The detector catches **62 deterministic issues** across four families:
 
 | Family | Rules | Examples |
 |--------|------:|----------|
-| **AI-slop tells** | 26 | overused vocabulary (*delve / tapestry / underscore*), cliché openers, manufactured contrast ("not just X — it's Y"), conclusion-that-restates, vague attribution, em-dash overuse, smart quotes in plaintext, emoji bullets, assistant meta-phrases ("I hope this helps"), bold-lead-in lists, tricolon density |
+| **AI-slop tells** | 32 | overused vocabulary (*delve / meticulous / underscore*, weighted by measured over-use), cliché openers, manufactured contrast ("not just X — it's Y"), the "despite challenges… continues to" closer, significance/legacy boilerplate, conclusion-that-restates, vague attribution, em-dash overuse, smart quotes in plaintext, emoji bullets, assistant meta-phrases ("I hope this helps"), bold-lead-in lists, tricolon density |
 | **Clarity & concision** | 11 | passive voice, long sentences, wordy phrases ("in order to" → "to"), zombie nouns, adverb overuse, reading-grade ceiling, weasel words, undefined jargon |
 | **Style-guide conformance** | 10 | sentence-case headings, contractions, second person, "please"/latinism bans (Google), terminology consistency, exclamation overuse, feature-noun capitalization |
 | **Inclusive & accessible language** | 9 | gendered defaults, ableist terms, non-inclusive idioms, vague link text ("click here"), skipped heading levels, missing alt text |
@@ -189,6 +190,27 @@ By default, `detect` respects the same `.limpid/config.json` and `.limpid/config
 For a waiver that should travel with one file instead of the repo config, add an inline comment: `<!-- limpid-disable overused-word: quoting a primary source -->`. The marker works in any comment syntax, scopes to the whole file (or one line with `limpid-disable-line` / `limpid-disable-next-line`), and is bypassed by `--no-inline-ignores` or `--no-config`.
 
 Full detector docs: [limpid.style/docs/detector](https://limpid.style/docs/detector).
+
+## Fact-checking & grounding
+
+Style is only half the problem — the other half is confident, wrong claims. Add a `FACTS.md`
+(by hand or with `npx limpid facts add "…"`) and Limpid checks your prose against it:
+
+```bash
+npx limpid facts add "Limpid's CLI is 'npx limpid detect', not 'limpid scan'."
+npx limpid factcheck README.md                 # check claims against FACTS.md
+npx limpid factcheck draft.md --source notes.md # check a summary against its source
+```
+
+It runs cheapest-first: a deterministic pass aligns numbers, dates, and named entities between
+your text and your facts (the wrong-number tell), then an optional local NLI model labels each
+claim **Supported / Contradicted / Unsupported** with the evidence line attached. A contradiction
+is an error; an unsupported claim is advisory (absence isn't disproof). For text generated
+locally with your facts in context, an advanced opt-in sidecar uses a small local model's
+attention (Lookback-Lens style) to flag ungrounded spans. Everything runs on-device, no API key.
+
+Limpid never claims a document "is AI-written" — detectors are biased and that's not the goal.
+It points at spans worth rewriting and claims worth verifying.
 
 ## Supported Tools
 

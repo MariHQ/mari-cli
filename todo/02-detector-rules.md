@@ -39,7 +39,7 @@ Legend: **[core]** = M0 ship set (highest precision + highest value, ~24 rules).
 
 | # | id | method | sev | what it catches |
 |---|----|--------|-----|-----------------|
-| 1 | `overused-word` **[core]** | lexicon+density | warn | Tier-1/2 AI vocabulary spike (`delve, tapestry, testament, underscore, showcase, realm, multifaceted, intricate, nuanced, seamless, robust, leverage, boast, foster, garner`). Weighted; escalates to error on co-occurrence. |
+| 1 | `overused-word` **[core]** | lexicon+density | warn | AI vocabulary spike. Weight each word by its **measured** over-use ratio (Tier 1: `delve` r=28, `meticulous` 34.7×, `intricate` 11.2×, `commendable` 9.8×, `underscore` r=13.8, `showcase` r=10.7; Tier 2: `realm, pivotal, garner, boasts, adept, groundbreaking`; no-evidence heuristics at low weight: `tapestry, testament, leverage, robust, seamless, nuanced, multifaceted`). **Never fires on first hit** — density per 1k words + super-linear co-occurrence bonus. Seed the style-word allow/deny list from `berenslab/chatgpt-excess-words` → `excess_words.csv` (only flag verbs/adj/adv, never content nouns). See [03-research.md §1](03-research.md). |
 | 2 | `marketing-buzzword` **[core]** | lexicon | warn | `streamline, empower, supercharge, world-class, enterprise-grade, cutting-edge, game-changing, next-generation, best-in-class, turnkey, mission-critical, scalable, synergy, holistic, robust solution`. |
 | 3 | `cliche-opener` **[core]** | regex (anchored) | warn | Paragraph/sentence-initial `In today's fast-paced world`, `In the (ever-evolving\|ever-changing) landscape of`, `In the realm of`, `When it comes to`, `At its core`, `In the world of`. |
 | 4 | `filler-phrase` **[core]** | regex | warn | `It's important to note that`, `It's worth noting/mentioning`, `Needless to say`, `At the end of the day`, `That being said`. |
@@ -119,9 +119,38 @@ Legend: **[core]** = M0 ship set (highest precision + highest value, ~24 rules).
 
 ---
 
-## Hard cases — how we stay deterministic without ML
+## Family A+ — round-2 additions (high-precision AI-prose tells)
 
-Patterns that "want" a classifier, handled with rules + thresholds instead:
+Surfaced by the verified Wikipedia "Signs of AI writing" + tropes.fyi taxonomy ([03-research.md §2](03-research.md)).
+All DET, high precision, and **uniquely AI** — none exist in proselint/write-good/Vale/alex, so
+they are core to our differentiation. Added to Family A.
+
+| # | id | method | sev | what it catches |
+|---|----|--------|-----|-----------------|
+| 57 | `despite-challenges-closer` **[core]** | regex | warn | The signature AI wrap-up: `despite (its\|these\|the) … (challenges\|difficulties)` paired with `continues to (thrive\|evolve\|grow\|serve\|play)`. Very distinctive, near-zero FP. WP §Outline-like conclusions. |
+| 58 | `significance-boilerplate` **[core]** | regex | warn | Undue-significance filler: `stands as a testament`, `marking a pivotal moment`, `leaving an indelible mark`, `enduring legacy`, `key turning point`, `plays a (vital\|crucial\|pivotal\|key) role`. WP §Undue emphasis. |
+| 59 | `serves-as-copula` | regex+density | advisory | Copula avoidance — `serves as`, `stands as`, `refers to`, `exemplifies`, `represents a` where "is" would do. Density-gated. WP; tropes.fyi "Serves As Dodge." |
+| 60 | `media-coverage-boilerplate` | regex | advisory | Canned notability puffery: `featured in … and other (prominent) outlets`, `profiled in`, `maintains a (strong\|active) (social media\|digital) presence`. WP §Canned emphasis on notability. |
+| 61 | `superficial-ing-participle` | density | advisory | Clause-final vague-significance participles: `, (highlighting\|underscoring\|emphasizing\|reflecting\|symbolizing\|contributing to\|fostering\|ensuring) …` stacked above a per-1k-word rate. WP §Superficial analyses. |
+| 62 | `future-outlook-speculation` | regex | advisory | Speculative closers: `the future of … lies in`, `evolving landscape`, `continues to evolve`, section titles `Future Outlook` / `Challenges and Legacy`. WP §Outline-like conclusions. |
+| 63 | `conversational-scaffolding` | regex | advisory | Explainer-cadence openers: `let's (delve into\|break this down)`, `think of it (as\|like)`, `imagine a world where`, `to put it simply`, `at its core`, `here's the (kicker\|thing)`. tropes.fyi Tone; Grammarly. |
+
+> Also reclassified: rule #9 `vague-attribution` absorbs the WP "weasel sourcing" list (`experts argue`,
+> `observers have cited`, `industry reports`, `efforts are ongoing to`); the old #26
+> `weasel-attribution-passive` is merged into #9 to remove overlap (net Family A change = +6, not +7).
+
+### Negative signals (suppress false positives — lower the slop score, don't raise it)
+Reuters/WP finding: AI prose *avoids* contractions, slang, and first-person anecdote. Presence of
+those should **discount** the document-level slop score so genuinely human casual writing isn't flagged.
+
+---
+
+## Hard cases — deterministic approximation + optional ML upgrade
+
+Patterns that "want" a classifier now have **two paths**: a deterministic approximation that
+always runs (below), and an ML upgrade for better recall when `--ml` is on
+([04-ml-layer.md](04-ml-layer.md)). Ship the deterministic path first; the ML layer augments
+and de-dupes against it, never replaces it.
 
 - **Conclusion *restates* the intro (semantic):** we don't do embedding similarity. Approximate
   with (a) the marker rule #8, plus (b) a token-overlap heuristic — high n-gram overlap between
@@ -135,7 +164,11 @@ Patterns that "want" a classifier, handled with rules + thresholds instead:
   **sentence-length-variance** signal (low variance = monotone) — zero models, computed from
   segmentation. Surfaced as advisory, feeds the `cadence` command.
 - **Buzzword vs legitimate term:** density + co-occurrence + STYLE.md allowlist
-  (`ignoreValues`) so a brand that genuinely ships a "platform" isn't nagged.
+  (`ignoreValues`) so a brand that genuinely ships a "platform" isn't nagged. ML upgrade:
+  GLiNER span extraction catches paraphrased buzzwords not on any list.
+- **Factual hallucination (new family):** confident-but-wrong claims are the highest-signal
+  slop. Handled by the grounding layer against a user `FACTS.md` — see
+  [05-grounding.md](05-grounding.md), Family G.
 
 Every "hard" rule ships at `advisory` until fixtures prove precision, then promotes to `warn`.
 
@@ -145,14 +178,21 @@ Every "hard" rule ships at `advisory` until fixtures prove precision, then promo
 
 | Family | Count | Core (M0) |
 |--------|------:|----------:|
-| A — AI-slop tells | 26 | 13 |
+| A — AI-slop tells (incl. A+ round-2) | 32 | 15 |
 | B — Clarity & concision | 11 | 7 |
 | C — Style-guide conformance | 10 | 2 |
 | D — Inclusive & accessible | 9 | 6 |
-| **Total** | **56** | **28** |
+| **Total** | **62** | **30** |
 
 Core ships the high-precision, high-value rules first; advisory/style-gated rules follow as
-fixtures validate them.
+fixtures validate them. (Family A = 26 original + 6 net round-2 additions after the #9/#26 merge.)
+
+### Reuse & licensing (we are Apache-2.0; see [03-research.md §4](03-research.md))
+Seed lexicons from permissive prior art rather than hand-writing them: **proselint** (BSD-3:
+clichés/jargon/weasel/redundancy/Latinisms), **write-good** (MIT: passive/wordy/adverb), and
+**retext-equality / alex** (MIT: the inclusive-language data in `data/en/*.yml`). Mirror the
+**Vale** Microsoft/Google YAML (MIT) for Family C. Reimplement (don't vendor) anything
+**LanguageTool**-class — it's LGPL-2.1+. Preserve upstream license notices.
 
 ---
 
