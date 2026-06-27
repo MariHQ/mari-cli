@@ -1,15 +1,27 @@
-# Limpid — ML layer design
+# Mari — Models design (default local models + opt-in generative)
 
-The optional model layer that augments the deterministic core. **Local-first** (ONNX /
-transformers.js, no API key), **lazy-loaded** (weights download on first `--ml` use), and
-never required — the deterministic detector always runs without it. Sources: the round-1
-detection-methods survey (folded in here) + [03-research.md](03-research.md).
+**Reframe (important):** the dividing line is **model size**, not "rules vs. AI." GLiNER and
+BERT/DeBERTa are *small encoder models* — one forward pass, CPU, milliseconds, no GPU, no API.
+They run **by default** as part of the detector (weights auto-cached on first run). The only
+genuinely heavy thing — and therefore the only opt-in — is a **generative** model (Qwen) used
+for attention-based grounding and claim decomposition (see [05-grounding.md](05-grounding.md)).
+A `--no-models` mode runs the pure-deterministic tier alone for offline/locked-down use.
+Local-first throughout (no API key). Source: round-1 detection survey + [03-research.md](03-research.md).
 
-## Why ML at all (now that it's unlocked)
+| Component | Tier | Default? |
+|-----------|------|:---:|
+| GLiNER slop-span extraction | small encoder | ✅ |
+| Small NLI / fact-checker (grounding Tier 3) | small encoder | ✅ |
+| AI-likelihood gauge (soft score) | small encoder | ✅ |
+| Perplexity + burstiness | tiny LM + pure stat | ✅ |
+| Qwen attention grounding + LLM claim split | generative LLM | opt-in |
 
-The deterministic core nails the *explicit* tells (wordlists, phrase templates, formatting).
-It cannot reach the *fuzzy* ones: paraphrased buzzwords, slop spans not on any list, tone,
-sentence-level "this reads machine-generated," and grounding/factuality. ML covers those.
+## Why models at all
+
+The deterministic rules nail the *explicit* tells (wordlists, phrase templates, formatting).
+They cannot reach the *fuzzy* ones: paraphrased buzzwords, slop spans not on any list, tone,
+sentence-level "this reads machine-generated," and grounding/factuality. The small default
+models cover those at no meaningful cost; the generative tier covers attention-grounding.
 
 **Honesty principle (carried from research, non-negotiable):** an AI-text classifier is a
 *soft signal, never a verdict*. Stanford (Liang et al., *Patterns* 2023,
@@ -48,8 +60,8 @@ labels = ["marketing_buzzword", "hedge_phrase", "filler_phrase",
   `roberta-base-openai-detector` is GPT-2-era, skip.
 - Runs via `@huggingface/transformers` text-classification pipeline (ONNX, local).
 - **Output:** a 0–1 "reads-machine-generated" gauge surfaced with the ESL/technical-prose
-  caveat. Gated behind `--ml=classifier`. Feeds the document-level slop score as one weak
-  feature among many; never fires a per-line error.
+  caveat. Runs by default (it's a small encoder); feeds the document-level slop score as one weak
+  feature among many; never fires a per-line error, never a verdict. `--no-models` disables it.
 
 ### 3. Perplexity + burstiness — cheap, CPU-friendly
 - Tiny local GPT-2 (`Xenova/gpt2` via `@huggingface/transformers`, ~125MB int8) computes
@@ -65,43 +77,40 @@ labels = ["marketing_buzzword", "hedge_phrase", "filler_phrase",
 ```
 finding sources:
   deterministic rules (Families A–F)        ← always on, high precision, explainable
-  + GLiNER spans (ml-span:*)                ← --ml, recall on fuzzy spans
-  + classifier score (document-level)       ← --ml=classifier, soft gauge w/ caveat
-  + perplexity/burstiness (document-level)  ← --ml, advisory rhythm nudge
+  + GLiNER spans (model-span:*)             ← DEFAULT (small encoder), recall on fuzzy spans
+  + classifier score (document-level)       ← DEFAULT, soft gauge w/ ESL caveat
+  + perplexity/burstiness (document-level)  ← DEFAULT, advisory rhythm nudge
+  + Qwen attention grounding                ← OPT-IN (generative), Family G Tier 4
 
-dedupe: ML span overlapping a deterministic hit → single finding, confidence boosted.
-score:  document slop score = weighted blend; ML contributes, never dominates.
-output: per-finding `source: rule|ml-span|ml-score`, so users see what came from a model.
+dedupe: model span overlapping a deterministic hit → single finding, confidence boosted.
+score:  document slop score = weighted blend; model signals contribute, never dominate.
+output: per-finding `source: rule|model-span|model-score`, so users see what came from a model.
 ```
 
-## Local-first stack
+## Local models (the candidate set — all run on CPU)
 
-```
-@huggingface/transformers   // transformers.js v3+, ONNX pipelines, Node, no key
-onnxruntime-node            // ONNX backend
-gliner / GLiNER.js          // span extraction (custom slop labels), fine-tunable
-```
-Models (all local, lazy-downloaded, cached under `~/.limpid/models/`):
-`onnx-community/gliner_small-v2.1` (spans) · `Xenova/gpt2` (perplexity) ·
-`desklib/ai-text-detector-v1.01` (optional classifier).
+Default (small encoders, auto-cached on first run): a GLiNER span model (slop labels), a small
+GPT-2-class LM for perplexity, a small DeBERTa AI-likelihood classifier, and the DeBERTa NLI /
+fact-checker used by grounding. Opt-in (generative): a small Qwen (e.g. Qwen3-0.6B) for
+attention grounding + claim decomposition. Concrete model ids/sizes/licenses live in 03/05;
+all candidates are Apache-2.0 / MIT and run without a GPU or API key.
 
 ## CLI / config surface
 
 ```
-npx limpid detect --ml docs/            # deterministic + GLiNER spans + perplexity
-npx limpid detect --ml=classifier .     # also run the AI-likelihood gauge
-npx limpid detect --ml=off .            # force deterministic-only (default when no flag)
+mari detect docs/             # deterministic + default local models (GLiNER, classifier, perplexity)
+mari detect --no-models .     # pure-deterministic, no download (offline/locked-down)
+mari factcheck draft.md       # adds grounding (default NLI); --ground=attention for the Qwen tier
 ```
-`.limpid/config.json` → `ml.enabled`, `ml.classifier`, `ml.modelDir`, `ml.maxChars`
-(skip ML on huge files). The hook stays deterministic-only by default (latency); `--ml`
-is opt-in for explicit `detect`/`audit` runs.
+`config` → `models.enabled` (default true), `models.dir`, `models.maxChars` (skip models on huge
+files), `grounding.attention` (the only opt-in/generative switch). The hook runs the deterministic
+tier only by default (latency); explicit `detect`/`audit`/`factcheck` runs use the default models.
 
 ## Watermarking — still N/A
 SynthID / Kirchenbauer watermarks need generator cooperation and a key; they can't detect
 arbitrary third-party text. Out of scope (documented for completeness).
 
 ## Build notes
-- ML is a separate lazy-loaded module (`engine/ml/`); core install has zero model deps.
-- `@huggingface/transformers`, `onnxruntime-node`, `gliner` go in `optionalDependencies`
-  (like impeccable's puppeteer) so `npx limpid detect` works without them.
-- Fine-tune GLiNER on our fixture corpus once we have labeled slop spans (M4+).
+- Small models load lazily but are part of the default experience; only the generative tier is gated.
+- A `--no-models` path keeps the pure-deterministic detector fully functional with zero downloads.
+- Fine-tune GLiNER on our fixture corpus once we have labeled slop spans.

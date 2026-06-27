@@ -70,13 +70,20 @@ It ships as **one skill** (`/mari`) with sub-commands, **provider-native hooks**
 detector automatically on edits, and a **standalone CLI** that runs the detector with no agent,
 no model, and no key. Same architecture as Impeccable, retargeted from pixels to prose.
 
-The detector is **layered** — each layer is independent and degrades gracefully:
+The detector is **layered** — each layer is independent and degrades gracefully. The dividing
+line is not "rules vs. AI" — small encoder models (GLiNER, BERT/DeBERTa) run on any CPU in
+milliseconds and are part of the **default** engine. The only thing that's genuinely heavy, and
+therefore opt-in, is a **generative** model (Qwen) used for attention-based grounding and claim
+decomposition.
 
-| Layer | Runs by default? | What it does | Cost |
-|-------|:---:|--------------|------|
-| **Deterministic core** | ✅ always | Regex, wordlists, density thresholds, structural/markdown analysis | instant, explainable |
-| **ML layer** | opt-in | Span extraction (GLiNER), AI-likelihood gauge, perplexity/burstiness — catches fuzzy/paraphrased slop | a model on-device |
-| **Grounding layer** | opt-in (needs `FACTS.md`) | Claim extraction + fact verification (typed-span match, NLI entailment, attention grounding) | a model + a fact base |
+| Tier | Runs by default? | What it does | Cost |
+|------|:---:|--------------|------|
+| **Deterministic** | ✅ always | Regex, wordlists, density thresholds, structural/markdown analysis | instant, no download |
+| **Local models** | ✅ default (auto-cached once) | GLiNER slop-span extraction, small NLI/classifier for grounding & fuzzy slop, perplexity/burstiness | small encoder models, CPU, no GPU/API |
+| **Generative (opt-in)** | opt-in | Qwen for attention-grounding (Lookback Lens) + LLM atomic-claim decomposition | a generative LLM on-device |
+
+A `--no-models` mode runs the pure-deterministic tier alone for locked-down/offline environments
+(no download at all). Grounding additionally requires a `FACTS.md`.
 
 The core alone is a complete, useful product. The other layers are sharpening.
 
@@ -218,14 +225,15 @@ input (file | stdin | string literal)
    │
    ├─ segment ─────────────► sentences, words, headings, lists, links, code fences, paragraphs
    │
-   ├─ DETERMINISTIC CORE ──► Families A–F: regex / wordlist / density / structural checks
-   │                          (+ readability, burstiness, terminology vs STYLE.md)
+   ├─ DETERMINISTIC ───────► Families A–F: regex / wordlist / density / structural checks
+   │                          (+ burstiness, terminology vs STYLE.md)
    │
-   ├─ ML LAYER (opt-in) ───► GLiNER spans · AI-likelihood gauge · perplexity/burstiness
-   │                          (de-duped & merged against core hits)
+   ├─ LOCAL MODELS ────────► GLiNER slop-spans · small NLI/classifier · perplexity
+   │   (default, CPU)         (de-duped & merged against deterministic hits)
    │
-   ├─ GROUNDING (opt-in) ──► Family G: claim extraction → fact retrieval → typed-span match
-   │                          + NLI entailment + (advanced) attention grounding, vs FACTS.md
+   ├─ GROUNDING ───────────► Family G vs FACTS.md: claim extraction → fact retrieval →
+   │   (needs FACTS.md)       typed-span match + NLI entailment (default, small model)
+   │                          + attention grounding / LLM claim split (opt-in, Qwen)
    │
    └─ findings ───────────► dedupe → score → severity-sort → render (human | JSON)
 ```
@@ -253,20 +261,24 @@ These are computed once per document and reused by many rules.
 - **Markdown structure:** headings (level + text + case), list items (marker + content),
   links (text + target), emphasis spans, code fences/inline code (excluded), thematic breaks.
 
-### 9.2 Readability
-Compute per document; ship **Flesch-Kincaid Grade** as the headline plus a **syllable-free
-cross-check** (Coleman-Liau or ARI) — large FKGL↔CLI disagreement means the syllable heuristic
-misfired on this text.
+### 9.2 Readability — deliberately NOT a core metric
+Flesch-Kincaid Grade and friends are **not** part of the default detector. They're crude proxies
+(sentence length + syllable count), AI slop is usually *highly* readable so the grade is a weak
+slop signal, and the underlying problems are already caught more usefully by the actionable
+concision rules (`long-sentence`, `complex-word`, `nominalization`, `wordy-phrase`) — "this
+sentence is 41 words, split it" beats "grade 11.3."
+
+We ship a readability score **only** as an opt-in check for registers/style guides that mandate a
+grade ceiling (plain-language, government, health). It lives in the `plain` style pack, off by
+default elsewhere, and is always advisory. Formula (FKGL with a syllable-free Coleman-Liau
+cross-check, since the syllable estimate is the main error source):
 ```
 ASL = words/sentences ; ASW = syllables/word
 FKGL = 0.39·ASL + 11.8·ASW − 15.59
-FRE  = 206.835 − 1.015·ASL − 84.6·ASW
 CLI  = 0.0588·(letters/words·100) − 0.296·(sentences/words·100) − 15.8
-ARI  = 4.71·(chars/words) + 0.5·ASL − 21.43        # ceil to grade
-Fog  = 0.4·(ASL + 100·complexWords/words)          # complex = ≥3 syllables
 ```
-**Per-register grade ceilings:** plain/gov ≤ 8 (FRE ≥ 60) · marketing/consumer 7–9 · news 9–11 ·
-technical docs 10–12 · specialist ≤ 14 (flag > 16). Health content 6–8.
+Per-register ceilings when enabled: plain/gov ≤ 8, health 6–8. Other registers: don't score it —
+use the concision rules instead.
 
 ### 9.3 Syllable counting (the fragile part — ~3–8% word error after corrections, fine for
 aggregate scoring): exception table → strip silent `-e`/`-es`/`-ed` → count vowel groups
@@ -348,7 +360,7 @@ slop score so casual human writing isn't flagged.
 | `complex-word` | lexicon map | advisory | utilize→use, leverage→use, facilitate→help, commence→start, endeavor→try, ascertain→find out, numerous→many, sufficient→enough, methodology→method. |
 | `nominalization` | regex + lexicon | advisory | Light-verb + `-tion/-ment/-ance/-ence/-ity/-sion` noun → suggest the verb ("make a decision"→decide, "conduct an investigation"→investigate, "provide assistance"→assist). Pattern-based so it catches novel cases. |
 | `adverb-overuse` | density | advisory | `-ly` adverb density, especially intensifiers before adjectives (very/really/extremely). |
-| `reading-grade` | readability (§9.2) | warn | FKGL over the register ceiling. |
+| `reading-grade` | readability (§9.2) | advisory | **Opt-in, `plain` pack only** — FKGL over the ceiling for plain-language/regulated registers. Off by default; the concision rules above are the real lever. |
 | `weasel-word` | lexicon + density | warn | very, really, quite, fairly, rather, somewhat, just, basically, actually, simply, literally. |
 | `undefined-acronym` | structural | advisory | Acronym used before its first-use expansion. |
 | `redundant-pair` | lexicon | warn | "each and every", "first and foremost", "end result", "free gift", "past history", "future plans", "various different", "absolutely essential". |
@@ -459,21 +471,23 @@ money, percentages, and named entities from both the text and `FACTS.md`; align 
 mismatches. Catches the wrong-number/wrong-date/wrong-name hallucination with full traceability.
 → rules `number-date-mismatch`, `contradicts-fact`.
 
-**Tier 1 — Retrieve relevant facts.** For each claim pull the most relevant `FACTS.md` entries —
-default keyword/BM25 (zero downloads), or small sentence-embeddings when the ML layer is on.
+**Tier 1 — Retrieve relevant facts (default).** For each claim pull the most relevant `FACTS.md`
+entries — small sentence-embeddings (CPU) by default, or keyword/BM25 in `--no-models` mode.
 
-**Tier 2 — Claim extraction.** Default: sentence segmentation = candidate claims. Better:
-atomic-claim decomposition via a small local instruct model ("split into self-contained,
-decontextualized, single-fact claims, resolving pronouns"). Entity-level via GLiNER.
+**Tier 2 — Claim extraction (default = cheap).** Sentence segmentation gives candidate claims, and
+GLiNER gives entity-level claims — both default, CPU. *Optional upgrade:* atomic-claim
+decomposition via the generative model ("split into self-contained, decontextualized, single-fact
+claims, resolving pronouns") — opt-in, since it needs the generative tier.
 
-**Tier 3 — NLI entailment (the practical backbone).** For each claim vs its retrieved facts,
-classify premise(fact)→hypothesis(claim): entailment→**Supported**, contradiction→**Refuted**
+**Tier 3 — NLI entailment (default, the practical backbone).** For each claim vs its retrieved
+facts, classify premise(fact)→hypothesis(claim): entailment→**Supported**, contradiction→**Refuted**
 (contradicts-fact), neutral→**Unsupported**. Uses a small natural-language-inference model
 (DeBERTa-v3 trained on MNLI/FEVER/ANLI; or a dedicated small fact-checker like MiniCheck / a
-groundedness model like HHEM-2.1-Open). Each finding cites the exact evidence line for the user
-to judge.
+groundedness model like HHEM-2.1-Open) — all small encoder models that run on CPU. Each finding
+cites the exact evidence line for the user to judge.
 
-**Tier 4 — Attention grounding (advanced, opt-in).** Only when the text was generated *locally
+**Tier 4 — Attention grounding (opt-in, the only generative-model part).** Only when the text was
+generated *locally
 with `FACTS.md` in context*. Method: **Lookback Lens** (Chuang et al., EMNLP 2024,
 arXiv:2407.07071). At each generated token, compute the **lookback ratio** = attention mass on the
 context (the facts) ÷ (context + already-generated tokens), concatenated across all layers×heads,
@@ -500,28 +514,37 @@ fire, at different severities.
 
 ---
 
-## 17. The ML layer (HOW)
+## 17. The models (HOW) — most are default, one tier is opt-in
 
-Optional, on-device, lazy-loaded; the deterministic core always runs without it. The guiding
-principle: **ML points at spans worth rewriting; it never adjudicates authorship.**
+The dividing line is **size**, not "rules vs. AI." GLiNER and BERT/DeBERTa are small encoder
+models — a forward pass each, CPU, milliseconds, no GPU, no API — so they're part of the **default**
+detector (weights auto-download once and cache; `--no-models` skips them for offline use). Only the
+**generative** model is opt-in. Guiding principle throughout: **models point at spans worth
+rewriting; they never adjudicate authorship.**
 
-- **GLiNER span extraction (primary investment).** A generalist span model that takes arbitrary
-  natural-language labels at inference. We pass slop labels — `marketing_buzzword`, `hedge_phrase`,
-  `filler_phrase`, `vague_attribution`, `puffery`, `cliche` — and get back spans to highlight.
-  Strength: surfaces *fixable* spans (paraphrased buzzwords the wordlists miss). It de-dupes
+**Default local models (run on any machine):**
+- **GLiNER slop-span extraction (primary investment).** A generalist span model that takes
+  arbitrary natural-language labels at inference. We pass slop labels — `marketing_buzzword`,
+  `hedge_phrase`, `filler_phrase`, `vague_attribution`, `puffery`, `cliche` — and get back spans to
+  highlight. It surfaces *fixable* spans the wordlists miss (paraphrased buzzwords) and de-dupes
   against Family-A hits — a span found by both rule and model is boosted to high confidence. Ship
-  zero-shot first; fine-tune on our own labeled fixtures for the abstract rhetorical labels.
+  zero-shot; fine-tune on our own fixtures for the abstract labels.
+- **Small NLI / fact-checker (for grounding).** DeBERTa-v3 NLI / MiniCheck / HHEM — the backbone of
+  Family G Tier 3. Encoder models, CPU-fine.
 - **AI-likelihood gauge (soft only).** A small classifier emits a 0–1 "reads-machine-generated"
-  signal, surfaced *with the ESL/technical-prose bias caveat attached*, feeding the document score
-  as one weak feature. Never a per-line error, never a verdict. Gated behind an explicit flag.
-- **Perplexity + burstiness.** A tiny local language model scores how predictable the text is;
-  combined with the model-free burstiness statistic (§9.4) it yields a "uniform, machine-like
-  rhythm" nudge that feeds the `cadence` command.
+  signal, surfaced *with the ESL/technical-prose bias caveat attached*, as one weak feature in the
+  document score. Never a per-line error, never a verdict.
+- **Perplexity + burstiness.** A tiny local LM scores predictability; combined with the model-free
+  burstiness statistic (§9.4) it yields a "uniform, machine-like rhythm" nudge feeding `cadence`.
+
+**Opt-in generative tier (the only heavy thing):**
+- **Qwen (e.g. Qwen3-0.6B), used two ways:** attention-based grounding (Lookback Lens, §16 Tier 4)
+  and optional atomic-claim decomposition (§16 Tier 2). This is the tier behind any "opt-in" flag —
+  it's a generative LLM, larger and slower than the encoders above.
 
 (Heavier zero-shot detectors — DetectGPT, Fast-DetectGPT, Binoculars — are documented as advanced
-opt-ins only; they need large models/GPUs and aren't in the default experience. Watermark
-detection is out of scope: it needs generator cooperation and a key, so it can't read arbitrary
-third-party text.)
+opt-ins only; they need large models/GPUs. Watermark detection is out of scope: it needs generator
+cooperation and a key, so it can't read arbitrary third-party text.)
 
 ---
 
@@ -530,13 +553,15 @@ third-party text.)
 - **Per-finding severity** drives CI behavior: any `error` fails `mari detect` (exit non-zero);
   `--strict` promotes `warn`. `advisory` never fails CI.
 - **Document slop score (0–100)** is a weighted blend: lexical-density (weighted by measured
-  ratios, with the co-occurrence bonus) + cadence/formatting density + (if on) the ML gauge and
-  perplexity — **minus** the human-signal discount (contractions/slang/first-person). The ML
-  signals contribute but never dominate; the breakdown is always shown so a user sees *why*.
-- **Dedup & provenance:** overlapping rule+ML findings merge into one with boosted confidence;
-  every finding records its `source` so nothing a model produced is mistaken for a hard rule.
+  ratios, with the co-occurrence bonus) + cadence/formatting density + GLiNER spans + the
+  AI-likelihood gauge + perplexity — **minus** the human-signal discount (contractions/slang/
+  first-person). The model signals contribute but never dominate; the breakdown is always shown so
+  a user sees *why*. In `--no-models` mode the score uses the deterministic terms only.
+- **Dedup & provenance:** overlapping deterministic + model findings merge into one with boosted
+  confidence; every finding records its `source` so nothing a model produced is mistaken for a
+  hard rule.
 - **Register-aware thresholds:** the same rule fires at different rates by register (em-dash is
-  relaxed for editorial; sentence length is strict for microcopy; grade ceiling tightens for plain).
+  relaxed for editorial; sentence length is strict for microcopy).
 
 ---
 
@@ -564,72 +589,3 @@ third-party text.)
   manifest unless `--force`, and remembers the user's hook choice per-developer.
 - **Skill packaging** mirrors Impeccable's build: one source skill compiled to each harness's
   layout, with `pin` creating standalone `/<command>` shortcuts.
-
----
-
-## 21. Honesty principles (non-negotiable)
-
-1. **We fix slop; we never accuse.** No "this is AI-written" verdict. Detectors are biased
-   against non-native English (61% vs 5% false-positive gap) — authorship detection is an explicit
-   non-goal.
-2. **Unsupported ≠ false.** A claim absent from `FACTS.md` is advisory, not an error, unless the
-   user declares the fact base exhaustive or supplies a source.
-3. **Density over presence.** One "delve" is nothing; we score patterns, not words.
-4. **Show the evidence.** Every finding cites the rule, the offending span, the fix, and the
-   source/style-section — and ML findings are labeled as such.
-5. **The deterministic core stands alone.** Every higher layer is optional sharpening.
-
----
-
-## 22. Roadmap
-
-- **M0 — Detector core.** Segmentation + readability + density + lexicons + Families A/B + the
-  core of C–F + CLI + JSON + inline waivers + a fixture pair per rule.
-- **M1 — Skill core.** Setup/context/routing + core commands (init, document, deslop, tighten,
-  clarify, critique, audit, polish).
-- **M2 — Hooks + install** across the harnesses; ignore management; pin/unpin.
-- **M3 — Full command set + rule packs** (remaining commands, register references, `live`, the
-  full C–F packs).
-- **M4 — ML layer** (GLiNER spans, AI-likelihood gauge, perplexity), wired into deslop/audit scoring.
-- **M5 — Grounding & facts** (`FACTS.md`, `facts`/`factcheck`, Tier 0–3 grounding; Tier 4 attention
-  grounding as an advanced add-on).
-
-Every rule ships with a fixture pair (`bad` triggers, `good` is silent) and a one-line citation of
-the empirical source or style-guide section it enforces. Hard/contested rules ship `advisory` and
-promote to `warn` only once fixtures prove precision.
-
----
-
-## Appendix A — Evidence & citations
-
-- Kobak et al., *Science Advances* 2025 — https://arxiv.org/abs/2406.07016 — POS-labeled excess
-  words: `github.com/berenslab/chatgpt-excess-words` → `excess_words.csv`.
-- Liang et al., ICML 2024 (peer reviews) — https://arxiv.org/abs/2403.07183
-- Gray 2024 — https://arxiv.org/abs/2403.16887 · Juzek & Ward 2025 — https://arxiv.org/abs/2412.11385
-  · Yakura et al. 2024 — https://arxiv.org/abs/2409.01754 · Liang et al. *Patterns* 2025 —
-  https://arxiv.org/abs/2502.09747
-- Liang et al., *Patterns* 2023 (detector bias) — https://doi.org/10.1016/j.patter.2023.100779
-- Wikipedia "Signs of AI writing" — https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing ·
-  tropes.fyi · Grammarly common AI words · Reuters Institute on AI prose.
-- Microsoft Writing Style Guide — https://learn.microsoft.com/style-guide/ · Google developer
-  documentation style guide — https://developers.google.com/style/ (word list:
-  https://developers.google.com/style/word-list).
-- plainlanguage.gov / Federal Plain Language Guidelines · GOV.UK A–Z style.
-- Prior art: Vale (vale.sh), proselint, write-good, alex/retext-equality, textlint, LanguageTool.
-- GLiNER — https://arxiv.org/abs/2311.08526 · Lookback Lens — https://arxiv.org/abs/2407.07071 ·
-  MiniCheck — https://arxiv.org/abs/2404.10774 · FActScore — https://arxiv.org/abs/2305.14251 ·
-  SAFE — https://arxiv.org/abs/2403.18802.
-
-## Appendix B — License posture
-
-We are permissive-licensed. Reusable as data/logic: proselint (BSD-3), write-good (MIT),
-retext-equality/alex (MIT), Vale Microsoft/Google style YAML (MIT). Style-guide *prose* is not
-copied (Microsoft proprietary; Google text CC BY) — only the mechanical rules are reimplemented.
-LanguageTool (LGPL) is reimplemented or kept external, never vendored. Candidate models are all
-permissively licensed (Apache-2.0 / MIT) and run on-device; the deterministic core has no model
-dependency at all.
-
----
-
-*Companion design docs live in `todo/` (skills, rules, research dossier, ML layer, grounding,
-rule packs). This PITCH.md is the single consolidated source of truth.*

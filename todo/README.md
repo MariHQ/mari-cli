@@ -4,15 +4,15 @@ Design-first plan for Limpid: a design system for text that strips AI slop and e
 house style, delivered as one skill + provider hooks + a standalone deterministic CLI.
 Direct counterpart to [Impeccable](https://impeccable.style) (frontend design → prose).
 
-**Scope (updated):** detection is **layered, not deterministic-only**.
-1. A fast **deterministic core** (regex / wordlist / density / structural) — default, no model,
-   no key, instant, explainable. Most rules live here.
-2. An **ML layer** (BERT/RoBERTa/DeBERTa classifiers, GLiNER span extraction, perplexity/
-   burstiness) for the fuzzy patterns regex can't reach — see [`04-ml-layer.md`](04-ml-layer.md).
-3. A **grounding / factuality layer** — checks claims against a user-supplied fact base and uses
-   a small local model (Qwen) for attention-based grounding — see [`05-grounding.md`](05-grounding.md).
-ML is local-first (ONNX / transformers.js, no API key); the deterministic core always runs
-without it. We use whatever gets the job done.
+**Scope (updated):** detection is **layered by model size, not "rules vs. AI."**
+1. **Deterministic** (regex / wordlist / density / structural) — instant, no download. Most rules.
+2. **Default local models** — small encoders that run on any CPU (no GPU/API): GLiNER slop-span
+   extraction, a BERT/DeBERTa NLI/fact-checker, an AI-likelihood gauge, perplexity. These are
+   NOT opt-in — they're part of the default detector ([`04-ml-layer.md`](04-ml-layer.md)).
+3. **Generative (opt-in)** — a small Qwen for attention-based grounding (Lookback Lens) and LLM
+   claim decomposition ([`05-grounding.md`](05-grounding.md)). The only heavy tier.
+All local-first, no API key. `--no-models` runs pure-deterministic for offline/locked-down use.
+Readability scores (Flesch-Kincaid) are deliberately **not** core — opt-in, plain-pack only.
 
 ## Design docs
 
@@ -80,19 +80,21 @@ Context files (parallel to impeccable's PRODUCT.md + DESIGN.md):
 
 ## Milestones
 
-- [ ] **M0 — Detector core.** Tokenizer + readability + density helpers + lexicons +
-      registry + the deterministic core rules (02 + 06) + `npx limpid detect` (text/markdown) +
-      JSON output + inline ignores. Fixtures for every rule.
+- [ ] **M0 — Detector core.** Tokenizer + density helpers + lexicons + registry + the
+      deterministic rules (02 + 06) + `mari detect` (text/markdown) + JSON + inline ignores +
+      a fixture pair per rule. Pure deterministic; no models yet.
 - [ ] **M1 — Skill core.** `SKILL.src.md` + setup/context + routing + core commands
       (`init`, `document`, `deslop`, `tighten`, `clarify`, `critique`, `audit`, `polish`).
-- [ ] **M2 — Hooks + install.** `hook.mjs` + provider manifests + `npx limpid install/update`
+- [ ] **M2 — Hooks + install.** hook + provider manifests + `mari install/update`
       across claude/cursor/codex/copilot, hook ignore management, `pin`/`unpin`.
-- [ ] **M3 — Full command set + rule packs.** Remaining commands + register references +
-      `live` mode + Families C–F (style-guide / inclusive / formatting / citation packs).
-- [ ] **M4 — ML layer.** Lazy-loaded ONNX classifier + GLiNER span extraction + perplexity/
-      burstiness (`--ml`), wired into `deslop`/`audit` scoring (04-ml-layer.md).
-- [ ] **M5 — Grounding & facts.** `FACTS.md` + `facts` command + claim extraction + NLI
-      entailment + Qwen attention grounding; `factcheck` command + grounding family (05-grounding.md).
+- [ ] **M3 — Default local models + full rule packs.** GLiNER slop-span extraction + small
+      NLI/classifier + perplexity folded into the default detector (auto-cached, CPU,
+      `--no-models` to skip). Remaining commands + register references + Families C–F.
+- [ ] **M4 — Grounding & facts.** `FACTS.md` + `facts`/`factcheck` + Tier 0–3 grounding
+      (typed-span, retrieval, NLI — all default/CPU) + grounding family (05-grounding.md).
+- [ ] **M5 — Generative tier (opt-in).** Qwen attention grounding (Lookback Lens, Tier 4) +
+      optional LLM atomic-claim decomposition. The only heavy, opt-in part.
+- [ ] **Optional readability.** Flesch-Kincaid only in the `plain` pack for regulated registers.
 
 ## Resolved by round-2 research (see [03-research.md](03-research.md))
 

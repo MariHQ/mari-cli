@@ -14,7 +14,7 @@ Mari is a **design system for text**. It adds:
 
 - **One setup flow.** `/Mari init` writes `PRODUCT.md` and offers `STYLE.md` and `FACTS.md`, so every later command knows the audience, register (docs / marketing / editorial / UX microcopy), voice, banned words, terminology, the base style guide you write to (Microsoft, Google, AP, Chicago, plain language), and your ground-truth facts.
 - **21 commands.** A shared editorial vocabulary with your AI: `deslop`, `tighten`, `sharpen`, `clarify`, `critique`, `audit`, `polish`, `factcheck`, and more.
-- **A deterministic detector core** — regex, wordlist, density, and structural rules that run with no model, no download, and no API key — plus an **optional local ML layer** (BERT/GLiNER span extraction, perplexity) and a **grounding layer** that checks claims against your facts. Everything runs on-device.
+- **A detector that runs on any machine.** Deterministic rules (regex/wordlist/density/structural) plus small local encoder models (GLiNER slop-span extraction, a BERT/DeBERTa NLI checker) — all CPU, no GPU, no API key, weights cached once. A heavier **generative model is opt-in** for attention-based fact-grounding, and `--no-models` runs pure-deterministic for offline use.
 
 ## What's Included
 
@@ -203,11 +203,11 @@ npx Mari factcheck draft.md --source notes.md # check a summary against its sour
 ```
 
 It runs cheapest-first: a deterministic pass aligns numbers, dates, and named entities between
-your text and your facts (the wrong-number tell), then an optional local NLI model labels each
-claim **Supported / Contradicted / Unsupported** with the evidence line attached. A contradiction
-is an error; an unsupported claim is advisory (absence isn't disproof). For text generated
-locally with your facts in context, an advanced opt-in sidecar uses a small local model's
-attention (Lookback-Lens style) to flag ungrounded spans. Everything runs on-device, no API key.
+your text and your facts (the wrong-number tell), then a small local NLI model (CPU, runs by
+default) labels each claim **Supported / Contradicted / Unsupported** with the evidence line
+attached. A contradiction is an error; an unsupported claim is advisory (absence isn't disproof).
+For text generated locally with your facts in context, an **opt-in** generative model flags
+ungrounded spans from its attention (Lookback-Lens style). Everything runs on-device, no API key.
 
 Mari never claims a document "is AI-written" — detectors are biased and that's not the goal.
 It points at spans worth rewriting and claims worth verifying.

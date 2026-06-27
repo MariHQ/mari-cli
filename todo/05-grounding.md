@@ -93,7 +93,7 @@ measures whether the model actually attended to the facts.
 text ──▶ claim extraction (sentences; opt. atomic via small LLM)
             │
             ▼
-     retrieve facts (BM25 default; MiniLM embeddings with --ml)
+     retrieve facts (MiniLM embeddings by default, CPU; BM25 under --no-models)
             │
    ┌────────┴────────┐
    ▼                 ▼
@@ -126,13 +126,14 @@ with no citation is a *style* tell; a concrete claim that contradicts `FACTS.md`
 
 - **`/limpid factcheck [target]`** (new skill command, Fix category) — extract claims, check
   against `FACTS.md`/`--source`, report Supported/Refuted/Unsupported with the evidence line.
-  Also surfaced as `npx limpid factcheck <file> [--source <file>] [--ml]`.
-- **`/limpid facts`** management (add/list/remove/import) — wraps the CLI above.
-- `.limpid/config.json` → `facts.path` (default `FACTS.md`), `facts.exhaustive`,
-  `grounding.retriever` (`bm25|embeddings`), `grounding.nli` (model id), `grounding.attention`
-  (off by default; needs the Python sidecar).
-- The hook does **not** run grounding by default (latency + needs FACTS.md); `factcheck`/`audit
-  --ml` are explicit.
+  Tiers 0–3 (typed-span + retrieval + NLI) run by default on CPU; add `--ground=attention` for the
+  opt-in generative Tier 4. Surfaced as `mari factcheck <file> [--source <file>] [--ground=attention]`.
+- **`/mari facts`** management (add/list/remove/import) — wraps the CLI above.
+- `config` → `facts.path` (default `FACTS.md`), `facts.exhaustive`, `grounding.retriever`
+  (`embeddings|bm25`), `grounding.nli` (model id), `grounding.attention` (off by default — the only
+  generative-tier switch).
+- The hook does **not** run grounding by default (latency + needs FACTS.md); `factcheck` /
+  `audit` invoke it explicitly.
 
 ## Honesty caveats (same discipline as the classifier)
 - "Unsupported" ≠ "false" — it means *not in your facts*. Default to advisory unless the user

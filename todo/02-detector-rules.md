@@ -78,7 +78,7 @@ Legend: **[core]** = M0 ship set (highest precision + highest value, ~24 rules).
 | 30 | `complex-word` **[core]** | lexicon (map) | advisory | Plain-language swaps: `utilize→use`, `leverage→use`, `facilitate→help`, `commence→start`, `endeavor→try`, `prior to→before`, `subsequent to→after`, `in regard to→about`. |
 | 31 | `nominalization` | regex+lexicon | advisory | Zombie nouns: `make a decision→decide`, `provide assistance→help`, `perform an analysis→analyze`, plus `-tion/-ment of` patterns. |
 | 32 | `adverb-overuse` | density | advisory | `-ly` adverb density (Hemingway), especially intensifiers before adjectives. |
-| 33 | `reading-grade` **[core]** | readability | warn | Flesch-Kincaid grade over the register ceiling (configurable; docs ~9, plain ~8). |
+| 33 | `reading-grade` | readability | advisory | **NOT core. Opt-in, `plain` pack only.** Flesch-Kincaid is a crude proxy and AI slop is usually highly readable, so it's a weak slop signal; the concision rules above (long-sentence/complex-word/nominalization/wordy-phrase) are the real lever. Ship it only for plain-language/regulated registers (gov/health) that mandate a grade ceiling. |
 | 34 | `weasel-word` **[core]** | lexicon+density | warn | `very, really, quite, fairly, rather, somewhat, just, basically, actually, simply, literally` density (write-good / proselint). |
 | 35 | `undefined-acronym` | structural | advisory | Acronym used before its expansion on first occurrence in the document. |
 | 36 | `redundant-pair` **[core]** | lexicon | warn | `each and every`, `first and foremost`, `various different`, `end result`, `future plans`, `past history`, `absolutely essential`, `free gift`. |
@@ -145,12 +145,12 @@ those should **discount** the document-level slop score so genuinely human casua
 
 ---
 
-## Hard cases — deterministic approximation + optional ML upgrade
+## Hard cases — deterministic approximation + default model recall
 
-Patterns that "want" a classifier now have **two paths**: a deterministic approximation that
-always runs (below), and an ML upgrade for better recall when `--ml` is on
-([04-ml-layer.md](04-ml-layer.md)). Ship the deterministic path first; the ML layer augments
-and de-dupes against it, never replaces it.
+Patterns that "want" a classifier have **two paths**: a deterministic approximation that always
+runs (below), and a small **default** local model (GLiNER spans / NLI — CPU, no opt-in needed,
+[04-ml-layer.md](04-ml-layer.md)) for better recall. `--no-models` falls back to the deterministic
+path alone. The models augment and de-dupe against the rules; they never replace them.
 
 - **Conclusion *restates* the intro (semantic):** we don't do embedding similarity. Approximate
   with (a) the marker rule #8, plus (b) a token-overlap heuristic — high n-gram overlap between
@@ -164,8 +164,8 @@ and de-dupes against it, never replaces it.
   **sentence-length-variance** signal (low variance = monotone) — zero models, computed from
   segmentation. Surfaced as advisory, feeds the `cadence` command.
 - **Buzzword vs legitimate term:** density + co-occurrence + STYLE.md allowlist
-  (`ignoreValues`) so a brand that genuinely ships a "platform" isn't nagged. ML upgrade:
-  GLiNER span extraction catches paraphrased buzzwords not on any list.
+  (`ignoreValues`) so a brand that genuinely ships a "platform" isn't nagged. Default GLiNER
+  span extraction additionally catches paraphrased buzzwords not on any list.
 - **Factual hallucination (new family):** confident-but-wrong claims are the highest-signal
   slop. Handled by the grounding layer against a user `FACTS.md` — see
   [05-grounding.md](05-grounding.md), Family G.
