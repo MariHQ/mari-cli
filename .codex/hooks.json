@@ -1,0 +1,8 @@
+{
+  "hooks": [
+    {
+      "event": "afterEdit",
+      "command": "node skill/scripts/hook.mjs"
+    }
+  ]
+}

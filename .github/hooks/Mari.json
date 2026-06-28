@@ -1,0 +1,4 @@
+{
+  "event": "postEdit",
+  "command": "node skill/scripts/hook.mjs"
+}

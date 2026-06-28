@@ -1,0 +1,19 @@
+{
+  "detector": {
+    "styleGuide": "microsoft",
+    "ignoreFiles": [
+      "PITCH.md",
+      "README.md",
+      "todo/**",
+      "skill/reference/**",
+      "fixtures/**"
+    ],
+    "ignoreRules": [],
+    "ignoreValues": {}
+  },
+  "hook": {
+    "enabled": true,
+    "quiet": true,
+    "maxFindings": 10
+  }
+}

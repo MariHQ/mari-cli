@@ -32,6 +32,13 @@ Readability scores (Flesch-Kincaid) are deliberately **not** core — opt-in, pl
 6. [`06-rule-packs.md`](06-rule-packs.md) — the full data-driven rule packs mined from the
    research (Families C–F): Microsoft & Google mechanical rules, the master word-swap map,
    inclusive-language categories, punctuation/formatting tells, and citation/reference tells.
+7. [`07-hooks-claude.md`](07-hooks-claude.md) — hook orchestration for **Claude Code**: the
+   `PostToolUse` binding, the `settings.local.json` manifest, the stdin/stdout (never-break-
+   the-turn) contract, file filtering, the deterministic-only latency budget, and the
+   on/off/ignore lifecycle.
+8. [`08-mvp.md`](08-mvp.md) — the **MVP definition**: the narrowest shippable slice
+   (deterministic detector + 8 core skill commands + Claude Code hook, single Microsoft pack,
+   offline, no models), the build order, success criteria, and what's explicitly cut and why.
 
 ## Architecture (mirror impeccable)
 
@@ -80,21 +87,48 @@ Context files (parallel to impeccable's PRODUCT.md + DESIGN.md):
 
 ## Milestones
 
-- [ ] **M0 — Detector core.** Tokenizer + density helpers + lexicons + registry + the
+- [x] **M0 — Detector core.** Tokenizer + density helpers + lexicons + registry + the
       deterministic rules (02 + 06) + `mari detect` (text/markdown) + JSON + inline ignores +
-      a fixture pair per rule. Pure deterministic; no models yet.
-- [ ] **M1 — Skill core.** `SKILL.src.md` + setup/context + routing + core commands
+      a fixture pair per rule. Pure deterministic; no models yet. **Done — 90 rules across
+      Families A–F (incl. Microsoft + Google packs), 180 fixture assertions + integration tests.**
+- [x] **M1 — Skill core.** `SKILL.src.md` + setup/context + routing + core commands
       (`init`, `document`, `deslop`, `tighten`, `clarify`, `critique`, `audit`, `polish`).
-- [ ] **M2 — Hooks + install.** hook + provider manifests + `mari install/update`
+      **Done — skill + 8 command references + 4 register references + `context.mjs`/`detect.mjs`.**
+- [x] **M2 — Hooks + install.** hook + provider manifests + `mari install/update`
       across claude/cursor/codex/copilot, hook ignore management, `pin`/`unpin`.
-- [ ] **M3 — Default local models + full rule packs.** GLiNER slop-span extraction + small
-      NLI/classifier + perplexity folded into the default detector (auto-cached, CPU,
-      `--no-models` to skip). Remaining commands + register references + Families C–F.
-- [ ] **M4 — Grounding & facts.** `FACTS.md` + `facts`/`factcheck` + Tier 0–3 grounding
-      (typed-span, retrieval, NLI — all default/CPU) + grounding family (05-grounding.md).
+      **Done** — Claude post-edit (live), Cursor pre-write (blocking) hook, Codex + Copilot
+      manifests, `--providers`/`--force`, `pin`/`unpin`. (Cursor/Codex/Copilot manifest schemas
+      are best-effort and may need per-provider tweaks once tested in those harnesses.)
+- [x] **M3 — Default local models + full rule packs.** Real local inference via a **Python ML
+      sidecar** (`ml/mari_ml.py`, torch + transformers + gliner; spoken to over JSON lines so models
+      load once). All three models run for real: **NLI** (`cross-encoder/nli-deberta-v3-xsmall`)
+      for grounding, **Qwen3.5-0.8B** perplexity → machine-likelihood (`--models` blends it into the
+      §18 slop score), and **GLiNER** (`gliner_small-v2.1`) zero-shot slop spans deduped against the
+      rules (`ml-slop-span`; zero-shot recall on abstract labels is low by design, needs fine-tuning).
+      Plus the model-free `uniform-cadence` burstiness signal (§9.4) and Families C–F (91 rules).
+      Opt-in via `--models`/`MARI_MODELS=1`; the default detector + editor hook stay instant and
+      Python-free. `npm run test:models` runs real inference (no stubs anywhere).
+- [x] **M4 — Grounding & facts.** `FACTS.md` + `facts`/`factcheck` + Tier 0–3 grounding.
+      **Tier 0** (deterministic): typed-span extraction (number/money/percent/year/date/entity) +
+      overlap retrieval → `number-date-mismatch`/`contradicts-fact`/`unsupported-claim`.
+      **Tier 3** (`--models`): real NLI entailment (`factcheckNLI`) catches *semantic*
+      contradictions with no number mismatch (verified: "requires API key" vs "no API key" → 99%
+      contradiction). `mari factcheck [--source] [--models]`, `mari facts add/list`.
+      Tier 4 (Lookback-Lens attention grounding, Qwen) remains the one advanced opt-in (M5).
 - [ ] **M5 — Generative tier (opt-in).** Qwen attention grounding (Lookback Lens, Tier 4) +
       optional LLM atomic-claim decomposition. The only heavy, opt-in part.
 - [ ] **Optional readability.** Flesch-Kincaid only in the `plain` pack for regulated registers.
+- [x] **Large-repo hardening** (stress-tested on Apache Flink 844 docs, hermes-agent 1.4k docs,
+      gbrain 350 docs; ~2–3s each). Mask HTML comments / Hugo+Liquid shortcodes / YAML+TOML front
+      matter / inline HTML; skip predominantly non-Latin docs (CJK) **and localized translations by
+      filename + directory locale** (`README.es.md`, `i18n/zh-Hans/`, `content.zh`, `pt-BR/`); skip
+      non-prose data files (fixtures, dumps), **generated/boilerplate files** (CHANGELOG, HISTORY,
+      LICENSE, NOTICE, `llms.txt` — walk only, explicit lint still works), and **vendored
+      third-party trees** (`3rdparty/`, `vendor/`, `third_party/`); table-aware number/spacing
+      rules; big tech-acronym + callout allowlist; spaced em-dash flagged once per doc; `overused-word`
+      capped at warn; dropped "hit" from violent-tech-metaphor (cache hit is standard); `--summary`
+      mode. Flink FPs −51%, hermes errors 131→14, gbrain advisory −33% — all remaining errors are
+      legit meta-doc examples. All regression-tested (35 integration checks).
 
 ## Resolved by round-2 research (see [03-research.md](03-research.md))
 

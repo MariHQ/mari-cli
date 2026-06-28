@@ -1,6 +1,6 @@
 # Mari
 
-Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 62 deterministic detector rules for AI-generated prose.
+Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 91 deterministic detector rules for AI-generated prose.
 
 > **Quick start:** From your project root, run `npx Mari install`, then run `/Mari init` inside your AI coding or writing tool. Full docs: [Mari.style](https://Mari.style).
 
@@ -174,14 +174,14 @@ npx Mari ignores add-file "vendor/**"
 npx Mari ignores add-value overused-word delve --reason "Quoting a source"
 ```
 
-The detector catches **62 deterministic issues** across four families:
+The detector catches **91 deterministic issues** across four families:
 
 | Family | Rules | Examples |
 |--------|------:|----------|
-| **AI-slop tells** | 32 | overused vocabulary (*delve / meticulous / underscore*, weighted by measured over-use), cliché openers, manufactured contrast ("not just X — it's Y"), the "despite challenges… continues to" closer, significance/legacy boilerplate, conclusion-that-restates, vague attribution, em-dash overuse, smart quotes in plaintext, emoji bullets, assistant meta-phrases ("I hope this helps"), bold-lead-in lists, tricolon density |
-| **Clarity & concision** | 11 | passive voice, long sentences, wordy phrases ("in order to" → "to"), zombie nouns, adverb overuse, reading-grade ceiling, weasel words, undefined jargon |
-| **Style-guide conformance** | 10 | sentence-case headings, contractions, second person, "please"/latinism bans (Google), terminology consistency, exclamation overuse, feature-noun capitalization |
-| **Inclusive & accessible language** | 9 | gendered defaults, ableist terms, non-inclusive idioms, vague link text ("click here"), skipped heading levels, missing alt text |
+| **AI-slop tells** | 29 | overused vocabulary (*delve / meticulous / underscore*, weighted by measured over-use), cliché openers, manufactured contrast ("not just X — it's Y"), the "despite challenges… continues to" closer, significance/legacy boilerplate, conclusion-that-restates, vague attribution, em-dash overuse, smart quotes in plaintext, emoji bullets, assistant meta-phrases ("I hope this helps"), bold-lead-in lists, tricolon density, transition/conversational scaffolding |
+| **Clarity & concision** | 12 | passive voice, long sentences, wordy phrases ("in order to" → "to"), zombie nouns, adverb overuse, reading-grade ceiling, weasel words, undefined jargon |
+| **Style, formatting & citations** | 39 | sentence-case headings, contractions, second person, "please"/latinism bans (Google), terminology consistency, exclamation overuse, number style, em-dash spacing, redundant acronyms, placeholder/tracking-param citations — Microsoft & Google packs |
+| **Inclusive & accessible language** | 11 | gendered defaults, ableist terms, person-first language, inclusive tech terms (allowlist/blocklist), non-inclusive idioms, vague link text ("click here"), skipped heading levels, missing alt text |
 
 The base style guide selects which conformance rules fire — Mari ships rule packs for the **Microsoft Writing Style Guide**, the **Google developer documentation style guide**, **AP**, **Chicago**, and **plainlanguage.gov**, in the spirit of [Vale](https://vale.sh)'s style packages but tuned for AI-generated drafts.
 

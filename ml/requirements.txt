@@ -1,0 +1,6 @@
+torch>=2.2
+transformers>=5.6
+gliner>=0.2.13
+sentencepiece>=0.2
+protobuf>=4
+accelerate>=0.30

@@ -1,0 +1,24 @@
+{
+  "name": "mari",
+  "version": "0.1.0-mvp",
+  "description": "A design system for text: strips AI slop and enforces house style. Deterministic detector, one skill, and a Claude Code hook.",
+  "type": "module",
+  "bin": {
+    "mari": "cli/bin/cli.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "detect": "node cli/bin/cli.js detect",
+    "test": "node test/run.mjs && node test/integration.mjs && node test/grounding.mjs && node test/hooks.mjs",
+    "test:models": "node test/models.mjs",
+    "selftest": "node cli/bin/cli.js detect fixtures/sloppy.md"
+  },
+  "license": "Apache-2.0",
+  "files": [
+    "cli",
+    "skill",
+    "ml"
+  ]
+}

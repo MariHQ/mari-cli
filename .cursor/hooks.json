@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "beforeEdit": [
+      {
+        "command": "node skill/scripts/hook-before-edit.mjs"
+      }
+    ]
+  }
+}
