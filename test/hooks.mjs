@@ -2,9 +2,32 @@
 // Hook library tests — payload extraction and the pre-write lint/block decision.
 
 import { proposedEdit, lintContent, targetFile, renderForAgent } from '../skill/scripts/hook-lib.mjs';
+import { addIgnore, setHookEnabled, resetConfig } from '../cli/engine/config-write.mjs';
 
 let pass = 0, fail = 0;
 const check = (name, cond) => { if (cond) pass++; else { fail++; console.log('  ✗ ' + name); } };
+
+// hooks lifecycle — the pure config mutations behind `mari hooks on|off|ignore-*|reset`
+{
+  const cfg = {};
+  setHookEnabled(cfg, false);
+  check('hooks off sets hook.enabled false', cfg.hook.enabled === false);
+  setHookEnabled(cfg, true);
+  check('hooks on sets hook.enabled true', cfg.hook.enabled === true);
+
+  check('ignore-rule appends', addIgnore(cfg, 'rule', ['em-dash-overuse']) && cfg.detector.ignoreRules.includes('em-dash-overuse'));
+  addIgnore(cfg, 'rule', ['em-dash-overuse']);
+  check('ignore-rule dedupes', cfg.detector.ignoreRules.filter((r) => r === 'em-dash-overuse').length === 1);
+  check('ignore-file appends', addIgnore(cfg, 'file', ['vendor/**']) && cfg.detector.ignoreFiles.includes('vendor/**'));
+  check('ignore-value appends under its rule', addIgnore(cfg, 'value', ['overused-word', 'delve']) && cfg.detector.ignoreValues['overused-word'].includes('delve'));
+  check('addIgnore rejects a bad kind', addIgnore(cfg, 'bogus', ['x']) === false);
+  check('addIgnore rejects missing args', addIgnore(cfg, 'rule', []) === false);
+
+  resetConfig(cfg);
+  check('reset clears ignoreRules', cfg.detector.ignoreRules.length === 0);
+  check('reset clears ignoreValues', Object.keys(cfg.detector.ignoreValues).length === 0);
+  check('reset drops the enabled flag', cfg.hook.enabled === undefined);
+}
 
 // proposedEdit tolerates several payload shapes
 check('proposedEdit reads content', proposedEdit({ tool_input: { file_path: 'a.md', content: 'hi' } }).text === 'hi');

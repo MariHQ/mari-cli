@@ -36,7 +36,8 @@ export function capabilities() {
     python: pythonPath(),
     available: !!pythonPath() && existsSync(SCRIPT),
     runtime: 'python sidecar (torch/transformers/gliner)',
-    models: { nli: 'cross-encoder/nli-deberta-v3-xsmall', ppl: process.env.MARI_PPL_MODEL || 'Qwen/Qwen3.5-0.8B', gliner: 'urchade/gliner_small-v2.1' },
+    models: { nli: 'cross-encoder/nli-deberta-v3-xsmall', ppl: process.env.MARI_PPL_MODEL || 'Qwen/Qwen3.5-0.8B', gliner: 'urchade/gliner_small-v2.1',
+      decomp: process.env.MARI_DECOMP_MODEL || 'Qwen/Qwen2.5-0.5B-Instruct', lookback: process.env.MARI_LOOKBACK_MODEL || 'Qwen/Qwen3-0.6B' },
   };
 }
 
@@ -91,6 +92,30 @@ export async function nliEntail(premise, hypothesis) {
 export async function perplexity(text) {
   const r = await request({ task: 'perplexity', text });
   return r.ppl;
+}
+
+// Tier 2: atomic-claim decomposition (instruct LM). A sentence → array of self-contained claims.
+export async function decomposeClaims(text) {
+  const r = await request({ task: 'decompose', text });
+  return r.claims || [];
+}
+
+// Tier 4: Lookback-Lens attention grounding. spans = [[start,end],…] char offsets into
+// `candidate`. Returns [{start,end,lookback,grounded}] — low lookback = the model didn't attend
+// to the provided context at that span.
+export async function lookbackGrounding(context, candidate, spans, threshold = 0.10) {
+  const r = await request({ task: 'lookback', context, candidate, spans, threshold });
+  return r.spans || [];
+}
+
+// Opt-in warmup for the heavy generative models — only touched when the caller asks for the
+// corresponding tier, so the default `--models` path (NLI/ppl/GLiNER) never loads them.
+export async function warmupGenerative({ decompose = false, lookback = false } = {}) {
+  await request({ task: 'ping' });
+  const jobs = [];
+  if (decompose) jobs.push(request({ task: 'decompose', text: 'Mari was built in 2026.' }).catch(() => {}));
+  if (lookback) jobs.push(request({ task: 'lookback', context: 'Mari was built in 2026.', candidate: 'Mari was built in 2026.', spans: [[0, 24]] }).catch(() => {}));
+  await Promise.all(jobs);
 }
 
 export async function machineScore(text) {

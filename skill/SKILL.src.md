@@ -4,8 +4,10 @@ description: >
   Use when the user wants to write, rewrite, edit, critique, audit, polish, tighten,
   clarify, or de-slop prose: documentation, README files, release notes, marketing copy,
   blog posts, UX microcopy, error messages, emails, or any text. Covers AI-slop removal
-  (buzzwords, clichés, cadence tells, em-dash overuse), clarity and concision, and
-  house-style conformance (Microsoft default). Not for code logic or non-text tasks.
+  (buzzwords, clichés, cadence tells, em-dash overuse), clarity and concision, voice and
+  tone, structure and formatting, readability, inclusive language, and house-style
+  conformance (Microsoft, Google, AP, Chicago, plain language). Not for code logic or
+  non-text tasks.
 argument-hint: "[command] [target]"
 user-invocable: true
 allowed-tools:
@@ -41,13 +43,17 @@ of ground truth — run it first so every edit is grounded in concrete findings,
 - **No argument** → run the detector over the changed/target files, then surface the 2–3
   highest-value commands (many buzzword/cliché hits → `deslop`; long-sentence hits → `tighten`;
   passive/jargon → `clarify`; inclusive/heading/link hits → `audit`). Never auto-edit.
-- **First word is a command** (`init`, `document`, `audit`, `deslop`, `tighten`, `clarify`,
-  `critique`, `polish`) → run that command; the rest of the line is the target.
-- **Intent maps to a command** ("make this punchier" → `tighten`, "fix the error copy" →
-  `clarify`) → run that command.
+- **First word is a command** (`init`, `document`, `draft`, `outline`, `glossary`, `audit`,
+  `critique`, `deslop`, `tighten`, `clarify`, `polish`, `sharpen`, `soften`, `harden`, `voice`,
+  `cadence`, `format`, `delight`, `adapt`, `localize`, `live`) → load `skill/reference/<command>.md`
+  and run it; the rest of the line is the target.
+- **Intent maps to a command** ("make this punchier" → `sharpen`, "cut this down" → `tighten`,
+  "fix the error copy" → `clarify`, "tone down the hype" → `soften`) → run that command.
 - **No clear match** → a general editing pass using setup context + the detector findings.
 
-## Commands (MVP set)
+## Commands
+
+The eight below are the most-used; each has a `skill/reference/<command>.md` with its full flow.
 
 ### `init`
 One-time setup. Ask the user their **register** (docs / marketing / editorial / microcopy) and
@@ -88,6 +94,21 @@ the mechanical findings. Produce a scored snapshot that `polish` can later resol
 ### `polish [target]`
 Final pre-publish pass: resolve the latest `critique` plus all detector findings, align to
 `STYLE.md`, and verify nothing regressed.
+
+## More commands
+
+Each has its own `skill/reference/<command>.md`; load it before running. Grouped by intent:
+
+- **Build** — `draft` (outline then write a piece end-to-end), `outline` (plan structure before
+  prose), `glossary` (harvest approved terms into `STYLE.md`).
+- **Refine** — `sharpen` (make hedged prose direct), `soften` (tone down hype), `harden`
+  (edge-case copy: errors, empty states, microcopy, i18n).
+- **Enhance** — `voice` (inject brand voice into flat copy), `cadence` (fix sentence rhythm),
+  `format` (headings, lists, emphasis, links), `delight` (add restrained human touches).
+- **Fix / channel** — `adapt` (rework for a different channel), `localize` (prepare for
+  translation and global English).
+- **Iterate** — `live` (generate alternatives for a selected span at different intensities;
+  also `node cli/bin/cli.js live` over stdin).
 
 ## Management
 

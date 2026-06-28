@@ -15,7 +15,7 @@ export async function readStdin() {
   } catch { return {}; }
 }
 
-const PROSE = new Set(['.md', '.mdx', '.mdc', '.markdown', '.txt']);
+const PROSE = new Set(['.md', '.mdx', '.mdc', '.markdown']);
 
 // Decide the target file from a Claude Code PostToolUse payload. Returns null if nothing to lint.
 export function targetFile(payload) {
@@ -41,7 +41,7 @@ export async function lint(fp, cwd) {
 
 // Pre-write path (Cursor): lint a proposed content string that isn't on disk yet.
 export async function lintContent(text, cwd, ext = '.md') {
-  const PROSE = new Set(['.md', '.mdx', '.mdc', '.markdown', '.txt']);
+  const PROSE = new Set(['.md', '.mdx', '.mdc', '.markdown']);
   if (!PROSE.has(ext.toLowerCase())) return { findings: [] };
   const { detectText } = await import(ENGINE);
   const { loadConfig } = await import(CONFIG);

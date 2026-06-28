@@ -1,4 +1,4 @@
-# Limpid — Deterministic detector rules design
+# Mari — Deterministic detector rules design
 
 The full registry: **56 deterministic rules**, no ML. Each rule is regex, wordlist,
 density threshold, or structural heuristic. Mirrors impeccable's `registry/antipatterns.mjs`
@@ -20,8 +20,8 @@ shape:
 **Scoring philosophy (carried from research):** never fire on a single match for
 cadence/density rules — humans trigger every individual tell. Slop is a *density and
 co-occurrence* signal. Lexicon rules emit per-hit findings but the file-level severity
-escalates with weighted density. Every rule is overridable via `.limpid/config.json`
-(`ignoreRules`/`ignoreValues`/`ignoreFiles`) and inline `<!-- limpid-disable id: reason -->`.
+escalates with weighted density. Every rule is overridable via `.Mari/config.json`
+(`ignoreRules`/`ignoreValues`/`ignoreFiles`) and inline `<!-- Mari-disable id: reason -->`.
 
 **Severity:** `error` = near-zero false positives, safe to fail CI · `warn` = strong tell,
 review · `advisory` = context-dependent, off by default in `--strict=false` CI.
@@ -203,4 +203,4 @@ Every rule ships a fixture pair under `tests/fixtures/<id>/`:
 - `good.md` — the clean rewrite that must NOT trigger it.
 - `cite.md` — one line: the empirical source or style-guide section the rule enforces.
 
-Detector tests assert: bad fires, good is silent, and inline `limpid-disable` suppresses.
+Detector tests assert: bad fires, good is silent, and inline `Mari-disable` suppresses.

@@ -1,4 +1,4 @@
-# Limpid — Rule packs (Families C–F)
+# Mari — Rule packs (Families C–F)
 
 The data-driven rules mined from [03-research.md](03-research.md). These are the rules that
 come straight from the style-guide tables, swap maps, inclusive-language data, formatting
@@ -168,7 +168,7 @@ registers; ties into Family G grounding (`fabricated-citation`).
 | academic | chicago | ✅ | ✅ | ✅ (strict) | ✅ (strict) |
 
 Register defaults live in the register references (01-skills.md); users override per-rule via
-`.limpid/config.json` and inline `<!-- limpid-disable id: reason -->`.
+`.Mari/config.json` and inline `<!-- Mari-disable id: reason -->`.
 
 ---
 

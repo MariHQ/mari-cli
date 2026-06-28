@@ -5,16 +5,19 @@
 //   mari install   [--scope=project]   (wire the Claude Code hook)
 //   mari hooks status
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../engine/config.mjs';
-import { detectText, detectTarget } from '../engine/index.mjs';
+import { addIgnore, setHookEnabled, resetConfig } from '../engine/config-write.mjs';
+import { detectText, detectTarget, PROSE_EXT } from '../engine/index.mjs';
+import { extname } from 'node:path';
 import { renderHuman, renderJSON, renderSummary, summarize } from '../engine/findings.mjs';
-import { parseFacts, factcheck, factcheckNLI } from '../engine/grounding.mjs';
+import { parseFacts, factcheck, factcheckNLI, factcheckDecomposed, factcheckLookback, sortFindings } from '../engine/grounding.mjs';
 import { scoreDocument, renderScore } from '../engine/score.mjs';
-import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, mlSlopFindings } from '../engine/ml/index.mjs';
+import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, decomposeClaims, lookbackGrounding, mlSlopFindings } from '../engine/ml/index.mjs';
 import { segment } from '../engine/segment.mjs';
+import * as LEX from '../engine/lexicons.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -38,6 +41,7 @@ async function main() {
     case 'unpin': return pin(false);
     case 'factcheck': return await runFactcheck();
     case 'facts': return facts();
+    case 'live': return live();
     case undefined:
     case '--help':
     case 'help': return usage();
@@ -60,6 +64,9 @@ async function detect() {
 
   const wantScore = flag('score');
   const useModels = flag('models') || modelsEnabled();
+  // Source-string linting (JS/TS/Python) is built (cli/engine/detect-strings.mjs) but off for
+  // now — Mari reads markdown only. Flip this to `flag('source')` to re-enable it.
+  const lintSource = false;
   let results;
   if (flag('stdin')) {
     const text = readFileSync(0, 'utf8');
@@ -70,7 +77,10 @@ async function detect() {
     results = [];
     for (const t of targets) {
       if (!existsSync(t)) { console.error(`No such path: ${t}`); process.exit(2); }
-      results.push(...detectTarget(t, { config, root, useInlineIgnores: useInline }));
+      if (statSync(t).isFile() && !PROSE_EXT.has(extname(t).toLowerCase())) {
+        console.error(`Note: Mari reads markdown only (.md, .markdown, .mdx, .mdc); skipping ${t}.`);
+      }
+      results.push(...detectTarget(t, { config, root, useInlineIgnores: useInline, lintSource }));
     }
   }
 
@@ -108,32 +118,28 @@ function ensureMariDir(root) {
 }
 function readMari(path) { return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}; }
 
+const IGNORE_KIND = { 'add-rule': 'rule', 'add-file': 'file', 'add-value': 'value',
+  'ignore-rule': 'rule', 'ignore-file': 'file', 'ignore-value': 'value' };
+
+function writeMari(path, cfg) { writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n'); }
+
 function ignores() {
   const root = process.cwd();
   const path = ensureMariDir(root);
   const cfg = readMari(path);
-  cfg.detector = cfg.detector || {};
-  const d = cfg.detector;
   const sub = rest[0];
   const args = positionals().slice(1);
-  switch (sub) {
-    case 'list': {
-      console.log('ignoreRules :', (d.ignoreRules || []).join(', ') || '(none)');
-      console.log('ignoreFiles :', (d.ignoreFiles || []).join(', ') || '(none)');
-      console.log('ignoreValues:', JSON.stringify(d.ignoreValues || {}));
-      return;
-    }
-    case 'add-rule': d.ignoreRules = uniq([...(d.ignoreRules || []), args[0]]); break;
-    case 'add-file': d.ignoreFiles = uniq([...(d.ignoreFiles || []), args[0]]); break;
-    case 'add-value': {
-      const [rule, value] = args;
-      d.ignoreValues = d.ignoreValues || {};
-      d.ignoreValues[rule] = uniq([...(d.ignoreValues[rule] || []), value]);
-      break;
-    }
-    default: console.error('Usage: mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value>'); process.exit(2);
+  if (sub === 'list') {
+    const d = cfg.detector || {};
+    console.log('ignoreRules :', (d.ignoreRules || []).join(', ') || '(none)');
+    console.log('ignoreFiles :', (d.ignoreFiles || []).join(', ') || '(none)');
+    console.log('ignoreValues:', JSON.stringify(d.ignoreValues || {}));
+    return;
   }
-  writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n');
+  if (!IGNORE_KIND[sub] || !addIgnore(cfg, IGNORE_KIND[sub], args)) {
+    console.error('Usage: mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value>'); process.exit(2);
+  }
+  writeMari(path, cfg);
   console.log(`Updated ${path}`);
 }
 function uniq(a) { return [...new Set(a.filter(Boolean))]; }
@@ -214,26 +220,55 @@ function hasMariHook(path, cmd) {
   try { return JSON.stringify(JSON.parse(readFileSync(path, 'utf8'))).includes('hook.mjs'); } catch { return false; }
 }
 
+const HOOKS_USAGE = 'Usage: mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value> [--reason "…"]';
+
 function hooks() {
   const sub = rest[0];
   const root = process.cwd();
-  if (sub === 'status') {
+
+  if (sub === 'status' || sub === undefined) {
     const local = join(root, '.claude', 'settings.local.json');
     const shared = join(root, '.claude', 'settings.json');
     const installed = hasMariHook(local) || hasMariHook(shared);
     const cfg = loadConfig(root);
     console.log('hook installed :', installed ? 'yes' : 'no');
-    console.log('hook enabled   :', cfg.hook.enabled === false ? 'no' : 'yes (default)');
+    console.log('hook enabled   :', cfg.hook.enabled === false ? 'no' : (cfg.hook.enabled === true ? 'yes' : 'yes (default)'));
     console.log('ignoreRules    :', [...cfg.ignoreRules].join(', ') || '(none)');
+    console.log('ignoreFiles    :', (cfg.ignoreFiles || []).join(', ') || '(none)');
+    console.log('ignoreValues   :', JSON.stringify(cfg.ignoreValues || {}));
     return;
   }
-  console.error('Usage: mari hooks status'); process.exit(2);
+
+  const path = ensureMariDir(root);
+  const cfg = readMari(path);
+
+  if (sub === 'on' || sub === 'off') {
+    setHookEnabled(cfg, sub === 'on');
+    writeMari(path, cfg);
+    console.log(`Hook ${sub === 'on' ? 'enabled' : 'disabled'} (${path}).`);
+    return;
+  }
+  if (sub === 'reset') {
+    resetConfig(cfg);
+    writeMari(path, cfg);
+    console.log(`Reset hook ignores and enabled flag (${path}).`);
+    return;
+  }
+  if (IGNORE_KIND[sub]) {
+    const args = positionals().slice(1);
+    if (!addIgnore(cfg, IGNORE_KIND[sub], args)) { console.error(HOOKS_USAGE); process.exit(2); }
+    const reason = opt('reason');
+    writeMari(path, cfg);
+    console.log(`Updated ${path}${reason ? ` (reason: ${reason})` : ''}.`);
+    return;
+  }
+  console.error(HOOKS_USAGE); process.exit(2);
 }
 
 async function runFactcheck() {
   const root = process.cwd();
   const target = positionals()[0];
-  if (!target || !existsSync(target)) { console.error('Usage: mari factcheck <file> [--source <file>] [--json] [--strict] [--models]'); process.exit(2); }
+  if (!target || !existsSync(target)) { console.error('Usage: mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--ground=attention]'); process.exit(2); }
   const sourcePath = opt('source');
   let facts, sourceMode = false;
   if (sourcePath) {
@@ -248,9 +283,28 @@ async function runFactcheck() {
   if (!facts.length) { console.error('No facts to check against.'); process.exit(2); }
 
   const docText = readFileSync(target, 'utf8');
-  const useModels = flag('models') || modelsEnabled();
+  const wantDecompose = flag('decompose');
+  const wantLookback = flag('lookback') || opt('ground') === 'attention';
+  const useModels = flag('models') || modelsEnabled() || wantDecompose || wantLookback;
   let findings;
-  if (useModels) {
+  if (wantLookback && !sourceMode) {
+    // attention grounding is only meaningful against the source the prose was written from
+    console.error('--lookback / --ground=attention needs the source: pass --source <file>.'); process.exit(2);
+  }
+  if (wantDecompose || wantLookback) {
+    if (!capabilities().available) { console.error('Mari ML sidecar unavailable: no Python venv (.venv) or ml/mari_ml.py. Run: python3.12 -m venv .venv && .venv/bin/pip install -r ml/requirements.txt'); process.exit(2); }
+    console.error('(loading generative grounding models — first run downloads ~1–2 GB)…');
+    try {
+      await warmupGenerative({ decompose: wantDecompose, lookback: wantLookback });
+      findings = wantDecompose
+        ? await factcheckDecomposed(docText, facts, { sourceMode, nli: nliEntail, decompose: decomposeClaims })
+        : await factcheckNLI(docText, facts, { sourceMode, nli: nliEntail });
+      if (wantLookback) findings = sortFindings([...findings, ...await factcheckLookback(docText, facts, { lookback: lookbackGrounding })]);
+    } catch (e) {
+      console.error(`(generative grounding failed: ${e.message} — falling back to NLI)`);
+      findings = await factcheckNLI(docText, facts, { sourceMode, nli: nliEntail });
+    }
+  } else if (useModels) {
     console.error('(loading NLI model for entailment checking…)');
     await warmup();
     findings = await factcheckNLI(docText, facts, { sourceMode, nli: nliEntail });
@@ -286,7 +340,46 @@ function facts() {
   console.error('Usage: mari facts list | add "<fact>"'); process.exit(2);
 }
 
-const PINNABLE = new Set(['audit', 'deslop', 'tighten', 'clarify', 'critique', 'polish', 'document', 'draft', 'sharpen', 'soften', 'harden', 'voice', 'cadence', 'format', 'delight', 'adapt', 'localize', 'factcheck']);
+// Deterministic concision pass for `live` — apply the swap lexicons; richer/creative variants
+// (bolder/quieter) are the agent's job via the `/mari live` skill (skill/reference/live.md).
+function tightenSentence(s) {
+  let out = s;
+  const apply = (map) => {
+    for (const [k, v] of Object.entries(map)) {
+      out = out.replace(new RegExp(`\\b${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), v);
+    }
+  };
+  apply(LEX.WORDY_PHRASES); apply(LEX.NOMINALIZATIONS); apply(LEX.COMPLEX_WORDS); apply(LEX.WORD_SWAP);
+  return out.replace(/\s{2,}/g, ' ').trim();
+}
+
+function live() {
+  const target = positionals()[0];
+  let text;
+  if (flag('stdin') || !target) text = readFileSync(0, 'utf8');
+  else { if (!existsSync(target)) { console.error(`No such path: ${target}`); process.exit(2); } text = readFileSync(target, 'utf8'); }
+  const ctx = segment(text);
+  const sents = ctx.sentences.filter((s) => s.text.trim().length);
+  if (!sents.length) { console.error('No sentences to iterate.'); process.exit(2); }
+
+  const pick = opt('n');
+  const focus = pick ? sents.filter((_, i) => i === parseInt(pick, 10) - 1) : sents;
+  if (pick && !focus.length) { console.error(`No sentence #${pick} (the text has ${sents.length}).`); process.exit(2); }
+
+  const config = { ignoreRules: new Set(), ignoreValues: {}, ignoreFiles: [], styleGuide: opt('style') || 'microsoft' };
+  for (const s of focus) {
+    const idx = sents.indexOf(s) + 1;
+    const orig = s.text.trim();
+    const tighter = tightenSentence(orig);
+    const flags = [...new Set(detectText(orig, { config, useInlineIgnores: false }).map((f) => f.ruleId))];
+    console.log(`\n[${idx}] ${orig}`);
+    console.log(`  tighter: ${tighter === orig ? '(already tight)' : tighter}`);
+    if (flags.length) console.log(`  flags:   ${flags.join(', ')}`);
+  }
+  console.log('\nPick one with --n=<k>. For bolder/quieter rewrites, run /mari live (agent-driven).');
+}
+
+const PINNABLE = new Set(['audit', 'deslop', 'tighten', 'clarify', 'critique', 'polish', 'document', 'draft', 'outline', 'glossary', 'sharpen', 'soften', 'harden', 'voice', 'cadence', 'format', 'delight', 'adapt', 'localize', 'live', 'factcheck']);
 
 function pin(create) {
   const name = positionals()[0];
@@ -312,12 +405,13 @@ function usage() {
   console.log(`mari — deterministic AI-slop + house-style detector (MVP)
 
 Usage:
-  mari detect <path|.> [--json] [--summary] [--score] [--strict] [--quiet] [--stdin] [--style=microsoft] [--models] [--no-config]
+  mari detect <path|.> [--json] [--summary] [--score] [--strict] [--quiet] [--stdin] [--style=microsoft|google|ap|chicago|plain] [--models] [--no-config]
   mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value>
-  mari factcheck <file> [--source <file>] [--json] [--strict]   Check claims vs FACTS.md
+  mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--ground=attention]   Check claims vs FACTS.md
   mari facts list | add "<fact>"                                Manage the fact base
   mari install [--providers=claude,cursor,codex,copilot] [--force]   Wire editor hooks
-  mari hooks status
+  mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>
+  mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut
 

@@ -1,7 +1,7 @@
-# Limpid — Grounding & facts feature
+# Mari — Grounding & facts feature
 
-The capability that takes Limpid beyond style: **does the prose actually match the truth?**
-The user supplies ground-truth facts; Limpid flags claims in the text that are **unsupported
+The capability that takes Mari beyond style: **does the prose actually match the truth?**
+The user supplies ground-truth facts; Mari flags claims in the text that are **unsupported
 by** or **contradict** those facts (the highest-signal kind of AI slop — confident
 hallucination). Local-first, no API key. Sources: dedicated grounding research this round
 (cited inline) + [04-ml-layer.md](04-ml-layer.md).
@@ -11,11 +11,11 @@ hallucination). Local-first, no API key. Sources: dedicated grounding research t
 A new context file, **`FACTS.md`** — the project's ground truth, hand-edited or built up via CLI:
 
 ```bash
-npx limpid facts add "Limpid was created in 2026."
-npx limpid facts add "The CLI command is 'npx limpid detect', not 'limpid scan'."
-npx limpid facts list
-npx limpid facts remove <id>
-npx limpid facts import notes.md        # bulk-import a source doc as facts
+npx Mari facts add "Mari was created in 2026."
+npx Mari facts add "The CLI command is 'npx Mari detect', not 'Mari scan'."
+npx Mari facts list
+npx Mari facts remove <id>
+npx Mari facts import notes.md        # bulk-import a source doc as facts
 ```
 
 `FACTS.md` is plain markdown — one fact per line/bullet, optionally grouped under headings,
@@ -124,7 +124,7 @@ with no citation is a *style* tell; a concrete claim that contradicts `FACTS.md`
 
 ## Commands & config
 
-- **`/limpid factcheck [target]`** (new skill command, Fix category) — extract claims, check
+- **`/Mari factcheck [target]`** (new skill command, Fix category) — extract claims, check
   against `FACTS.md`/`--source`, report Supported/Refuted/Unsupported with the evidence line.
   Tiers 0–3 (typed-span + retrieval + NLI) run by default on CPU; add `--ground=attention` for the
   opt-in generative Tier 4. Surfaced as `mari factcheck <file> [--source <file>] [--ground=attention]`.
@@ -144,6 +144,6 @@ with no citation is a *style* tell; a concrete claim that contradicts `FACTS.md`
 
 ## Build notes
 - Default JS build ships Tiers 0–3 (BM25 + ONNX NLI via transformers.js + typed-span matcher).
-- Tier 4 attention grounding is a separate optional **Python sidecar** (`limpid-grounding`),
+- Tier 4 attention grounding is a separate optional **Python sidecar** (`Mari-grounding`),
   documented but not in the default install; needs `transformers` + `torch` + eager attention.
 - `FACTS.md` parsing + `facts` CLI are deterministic and ship in M5 with the rest of grounding.

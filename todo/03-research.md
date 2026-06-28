@@ -1,4 +1,4 @@
-# Limpid — Research dossier (round 2, verified + cited)
+# Mari — Research dossier (round 2, verified + cited)
 
 Consolidated, source-verified research backing the detector rules and skills. Everything
 here is fetched-and-cited (round 2, 2026-06-26), superseding the rate-limited round 1.

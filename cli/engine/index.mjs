@@ -6,8 +6,12 @@ import { segment, isNonLatinProse } from './segment.mjs';
 import { RULES } from './rules.mjs';
 import { parseInlineWaivers, waived, fileIgnored } from './config.mjs';
 import { dedupe, sortFindings } from './findings.mjs';
+import { sourceLangFor, isSourceFile, isCodeFile, maskSource } from './detect-strings.mjs';
 
-export const PROSE_EXT = new Set(['.md', '.mdx', '.mdc', '.markdown', '.txt']);
+// Markdown only, for now. (.txt and source-string linting are intentionally out of scope —
+// the source extractor in detect-strings.mjs stays built but is unreachable unless lintSource
+// is explicitly turned on.)
+export const PROSE_EXT = new Set(['.md', '.mdx', '.mdc', '.markdown']);
 const SKIP_DIR = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'coverage', '.mari',
   'testdata', 'test-data', 'fixtures', '__fixtures__', 'golden', 'snapshots', '__snapshots__', 'target', 'out',
   // vendored / third-party trees — not the project's own prose
@@ -33,6 +37,7 @@ export function detectText(text, { config, useInlineIgnores = true } = {}) {
     raw.push({ ...f, line, col });
   };
   const pack = config?.styleGuide || 'microsoft';
+  ctx.styleGuide = pack; // shared rules (e.g. serial-comma) can vary behavior by base pack
   for (const rule of RULES) {
     if (config?.ignoreRules?.has(rule.id)) continue;
     // pack-gated rules only run under their base style guide; 'plain' rules are opt-in
@@ -57,9 +62,21 @@ export function detectText(text, { config, useInlineIgnores = true } = {}) {
   return sortFindings(findings);
 }
 
-export function detectFile(path, { config, root = process.cwd(), useInlineIgnores = true } = {}) {
+export function detectFile(path, { config, root = process.cwd(), useInlineIgnores = true, lintSource = false } = {}) {
   const rel = relative(root, path) || basename(path);
   if (config?.ignoreFiles && fileIgnored(rel, config.ignoreFiles)) return null;
+  const ext = extname(path).toLowerCase();
+  if (isSourceFile(ext)) {
+    // Supported source language: lint the human-facing text only, but only when asked (--source).
+    // Never prose-lint code — without the flag, skip it.
+    if (!lintSource) return null;
+    const masked = maskSource(readFileSync(path, 'utf8'), sourceLangFor(ext));
+    return { file: rel, findings: detectText(masked, { config, useInlineIgnores }), text: masked };
+  }
+  // Code in an unsupported language (Java, Scala, Go, …): never lint it as prose.
+  if (isCodeFile(ext)) return null;
+  // Markdown-only scope: skip anything that isn't a markdown file, even as an explicit target.
+  if (!PROSE_EXT.has(ext)) return null;
   if (isNonEnglishLocale(path)) return null; // localized translation (name.<locale>.md)
   const text = readFileSync(path, 'utf8');
   if (looksLikeData(text)) return null; // data dump / test fixture, not prose
@@ -67,6 +84,7 @@ export function detectFile(path, { config, root = process.cwd(), useInlineIgnore
 }
 
 export function isProse(path) { return PROSE_EXT.has(extname(path).toLowerCase()); }
+export function isSource(path) { return isSourceFile(extname(path).toLowerCase()); }
 
 // Localized docs follow the `name.<locale>.md` convention (README.es.md, README.zh-CN.md,
 // guide.ur-pk.md). English rules don't apply to other languages, so skip non-English locales.
@@ -97,7 +115,7 @@ export function detectTarget(target, opts = {}) {
   const results = [];
   if (st.isDirectory()) {
     for (const p of walk(target)) {
-      if (!isProse(p)) continue;
+      if (!isProse(p) && !(opts.lintSource && isSource(p))) continue;
       const r = detectFile(p, { ...opts, root });
       if (r) results.push(r);
     }

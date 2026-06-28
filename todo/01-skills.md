@@ -1,6 +1,6 @@
-# Limpid — Skills design
+# Mari — Skills design
 
-The `limpid` skill mirrors impeccable: **one user-invocable skill** with sub-commands,
+The `Mari` skill mirrors impeccable: **one user-invocable skill** with sub-commands,
 loaded references per command, and a setup phase that reads project context. Below is the
 skill spec, the routing logic, and every command's flow. Commands marked **[core]** ship in
 M1; the rest are M3.
@@ -10,7 +10,7 @@ M1; the rest are M3.
 ## Skill frontmatter (`SKILL.src.md`)
 
 ```yaml
-name: limpid
+name: Mari
 description: >
   Use when the user wants to write, rewrite, edit, critique, audit, polish, tighten,
   clarify, or de-slop prose: documentation, README files, release notes, marketing copy,
@@ -22,7 +22,7 @@ description: >
 argument-hint: "[command] [target]"
 user-invocable: true
 allowed-tools:
-  - Bash(npx limpid *)
+  - Bash(npx Mari *)
 license: Apache 2.0
 ```
 
@@ -117,7 +117,7 @@ detector first so the prose-level critique sits on top of mechanical findings.
 #### `audit [target]` **[core]**
 Mechanical quality pass: runs the detector and reports every finding grouped by family
 (slop / clarity / style-guide / inclusive-accessible), with bad→good fixes. This is the
-human-facing front end of `npx limpid detect`. Leans on: **all rules**.
+human-facing front end of `npx Mari detect`. Leans on: **all rules**.
 
 ### Refine
 

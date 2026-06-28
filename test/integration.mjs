@@ -32,6 +32,20 @@ check('frontmatter: no thematic-break FP',
 check('british spelling fires under google', rules('Pick a colour.', 'google').includes('american-spelling'));
 check('british spelling silent under microsoft', !rules('Pick a colour.', 'microsoft').includes('american-spelling'));
 
+// 4b. AP / Chicago / plain packs gate correctly.
+const oxford = 'We shipped docs, tests, and code.';
+check('AP flags the serial comma', rules(oxford, 'ap').includes('ap-serial-comma'));
+check('AP suppresses the shared missing-serial-comma rule', !rules('We shipped docs, tests and code.', 'ap').includes('serial-comma'));
+check('Chicago requires the serial comma (shared rule on)', rules('We shipped docs, tests and code.', 'chicago').includes('serial-comma'));
+check('AP number style fires on a single digit', rules('The release closed 9 issues.', 'ap').includes('ap-number-style'));
+check('Chicago spells out numbers up to one hundred', rules('The group has 42 members.', 'chicago').includes('chicago-number-style'));
+check('Chicago number style ignores numbers above 100', !rules('The build processed 250 files.', 'chicago').includes('chicago-number-style'));
+check('plain pack flags an over-20-word sentence', rules('This particular sentence has been written so that it clearly contains a few more than twenty distinct words in total here today.', 'plain').includes('plain-long-sentence'));
+check('AP/Chicago pack rules silent under microsoft', (() => {
+  const r = rules('The release closed 9 issues, tests, and code.', 'microsoft');
+  return !r.includes('ap-number-style') && !r.includes('ap-serial-comma') && !r.includes('chicago-number-style');
+})());
+
 // 5. Inline waiver suppresses on its line only.
 const waived = detectText('We utilize it. <!-- mari-disable-line complex-word -->\nWe utilize it again.', cfg());
 check('inline waiver: only the unwaived line flags complex-word',

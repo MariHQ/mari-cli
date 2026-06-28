@@ -195,6 +195,7 @@ const readingGrade = {
 const serialComma = {
   id: 'serial-comma', family: FAM.C, defaultSeverity: 'advisory',
   run(ctx, emit) {
+    if (ctx.styleGuide === 'ap') return; // AP omits the serial comma — `ap-serial-comma` handles it
     scan(ctx, /\b\w+,\s+\w+\s+(and|or)\s+\w+\b/gi, (m, i) =>
       emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `Missing serial (Oxford) comma before "${m[1]}".`));
   },
@@ -350,6 +351,60 @@ const americanSpelling = mapRule('american-spelling', FAM.C, 'warn', L.BRITISH_S
 const noPreannounce = listRule('no-preannounce', FAM.C, 'advisory', L.PREANNOUNCE, (w) => `Avoid time-relative wording "${w}" — docs outlive it.`, 'google');
 const noDirectional = mapRule('no-directional', FAM.C, 'advisory', L.DIRECTIONAL, 'Avoid directional cross-refs', 'google');
 
+// ======================= Family C: AP pack =======================
+
+// AP omits the Oxford/serial comma; flag its presence so prose drops it (the shared
+// `serial-comma` rule self-suppresses under ap, so the two never both fire).
+const apSerialComma = {
+  id: 'ap-serial-comma', family: FAM.C, defaultSeverity: 'advisory', pack: 'ap',
+  run(ctx, emit) {
+    scan(ctx, /\b\w+,\s+\w+(,)\s+(and|or)\s+\w+\b/gi, (m, i) => {
+      const commaOff = i + m[0].indexOf(`, ${m[2]}`);
+      emitAt(ctx, emit, this.id, this.family, 'advisory', commaOff, 1, `AP style omits the serial comma before "${m[2]}".`);
+    });
+  },
+};
+
+// AP spells out whole numbers zero through nine in prose; numerals for 10 and up.
+const apNumberStyle = {
+  id: 'ap-number-style', family: FAM.C, defaultSeverity: 'advisory', pack: 'ap',
+  run(ctx, emit) {
+    scan(ctx, /(?<![\w.$%/-])([0-9])(?![\w.,:%/-])/g, (m, i) => {
+      if (ctx.isTableLine(i)) return;
+      emitAt(ctx, emit, this.id, this.family, 'advisory', i, 1, `AP style: spell out whole numbers zero through nine ("${m[1]}").`);
+    });
+  },
+};
+
+// ======================= Family C: Chicago pack =======================
+
+// Chicago spells out whole numbers zero through one hundred in prose (numerals above 100).
+// Chicago also requires the Oxford comma — that's the always-on shared `serial-comma` rule.
+const chicagoNumberStyle = {
+  id: 'chicago-number-style', family: FAM.C, defaultSeverity: 'advisory', pack: 'chicago',
+  run(ctx, emit) {
+    scan(ctx, /(?<![\w.$%/:-])(\d{1,3})(?![\w.,:%/-])/g, (m, i) => {
+      if (ctx.isTableLine(i)) return;
+      if (parseInt(m[1], 10) > 100) return;
+      emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[1].length, `Chicago style: spell out whole numbers zero through one hundred ("${m[1]}").`);
+    });
+  },
+};
+
+// ======================= Family C: plain pack =======================
+
+// plainlanguage.gov keeps sentences short — stricter than the shared long-sentence ceiling (30).
+// Cover the 21–30 band the shared rule misses so the two don't double-report.
+const plainLongSentence = {
+  id: 'plain-long-sentence', family: FAM.C, defaultSeverity: 'advisory', pack: 'plain',
+  run(ctx, emit) {
+    for (const s of ctx.sentences) {
+      const n = ctx.countWords(s.text);
+      if (n > 20 && n <= 30) emitAt(ctx, emit, this.id, this.family, 'advisory', s.start, Math.min(s.text.length, 40), `Plain language keeps sentences under 20 words (this one is ${n}).`);
+    }
+  },
+};
+
 // ======================= Family D extras =======================
 
 const personFirst = mapRule('person-first-language', FAM.D, 'warn', L.PERSON_FIRST, 'Person-first language');
@@ -473,6 +528,8 @@ export const EXTRA_RULES = [
   noSpaceEmDash, noInternalCaps, omitYouCan, avoidWe, spellOutSmall, numeralSentenceStart, largeNumberGrouping, noKMB, leadingZero,
   // Family C google
   noGerundHeading, noLinkInHeading, latinismAbbrev, minimizingWords, abbrevAsVerb, periodsInAcronyms, noExclamation, americanSpelling, noPreannounce, noDirectional,
+  // Family C ap / chicago / plain
+  apSerialComma, apNumberStyle, chicagoNumberStyle, plainLongSentence,
   // Family D
   personFirst, genderedAddress, techHistorical, violentTech, ageistClassist, missingAltText, allCapsShouting,
   // Family E

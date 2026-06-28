@@ -22,6 +22,10 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 NLI_MODEL = os.environ.get("MARI_NLI_MODEL", "cross-encoder/nli-deberta-v3-xsmall")
 PPL_MODEL = os.environ.get("MARI_PPL_MODEL", "Qwen/Qwen3.5-0.8B")
 GLINER_MODEL = os.environ.get("MARI_GLINER_MODEL", "urchade/gliner_small-v2.1")
+# Generative grounding tier (opt-in, heavier): Tier 2 atomic-claim decomposition (instruct LM)
+# and Tier 4 Lookback-Lens attention grounding (needs eager attention to read the matrices).
+DECOMP_MODEL = os.environ.get("MARI_DECOMP_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+LOOKBACK_MODEL = os.environ.get("MARI_LOOKBACK_MODEL", "Qwen/Qwen3-0.6B")
 
 _state = {}
 
@@ -67,6 +71,33 @@ def get_gliner():
     return _state["gliner"]
 
 
+def get_decomp():
+    if "decomp" not in _state:
+        from transformers import AutoTokenizer, AutoModelForCausalLM
+        torch = _torch()
+        log(f"[mari-ml] loading decomposer {DECOMP_MODEL} (first run downloads weights) ...")
+        tok = AutoTokenizer.from_pretrained(DECOMP_MODEL, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            DECOMP_MODEL, torch_dtype=torch.float32, trust_remote_code=True)
+        model.eval()
+        _state["decomp"] = (tok, model)
+    return _state["decomp"]
+
+
+def get_lookback():
+    if "lookback" not in _state:
+        from transformers import AutoTokenizer, AutoModelForCausalLM
+        torch = _torch()
+        log(f"[mari-ml] loading lookback LM {LOOKBACK_MODEL} (eager attn) ...")
+        tok = AutoTokenizer.from_pretrained(LOOKBACK_MODEL, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            LOOKBACK_MODEL, torch_dtype=torch.float32,
+            attn_implementation="eager", trust_remote_code=True)
+        model.eval()
+        _state["lookback"] = (tok, model)
+    return _state["lookback"]
+
+
 def do_nli(req):
     torch = _torch()
     tok, model, id2label = get_nli()
@@ -101,7 +132,112 @@ def do_spans(req):
     return {"spans": spans}
 
 
-HANDLERS = {"nli": do_nli, "perplexity": do_perplexity, "spans": do_spans}
+# --- Tier 2: atomic-claim decomposition ------------------------------------------------------
+DECOMP_SYS = (
+    "You split a sentence into atomic factual claims. An atomic claim states exactly one fact, "
+    "is self-contained, and resolves all pronouns and references to explicit names from the "
+    "sentence. Copy numbers, dates, names, and quantities verbatim — never invent or alter them. "
+    "Ignore opinions, questions, instructions, and hedges. Output ONLY a JSON array of strings. "
+    "If there is no checkable factual claim, output []."
+)
+DECOMP_FEWSHOT = [
+    ("Mari, built in 2026, ships 90 rules and runs on the CPU.",
+     '["Mari was built in 2026.", "Mari ships 90 rules.", "Mari runs on the CPU."]'),
+    ("We think the new dashboard is pretty slick.", "[]"),
+]
+
+
+def _parse_claim_json(text, fallback):
+    import re
+    m = re.search(r"\[.*\]", text, re.S)
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except Exception:
+        return []
+    out, seen = [], set()
+    for c in arr:
+        if not isinstance(c, str):
+            continue
+        c = c.strip()
+        # drop empties, dupes, and runaway generations padding facts that weren't in the source
+        if c and c.lower() not in seen and len(c) <= 2 * len(fallback) + 40:
+            seen.add(c.lower())
+            out.append(c)
+    return out[:8]
+
+
+def do_decompose(req):
+    torch = _torch()
+    tok, model = get_decomp()
+    sent = req["text"].strip()
+    msgs = [{"role": "system", "content": DECOMP_SYS}]
+    for u, a in DECOMP_FEWSHOT:
+        msgs.append({"role": "user", "content": u})
+        msgs.append({"role": "assistant", "content": a})
+    msgs.append({"role": "user", "content": sent})
+    prompt = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+    ids = tok(prompt, return_tensors="pt").input_ids
+    with torch.no_grad():
+        out = model.generate(
+            ids, max_new_tokens=192, do_sample=False, num_beams=1,
+            repetition_penalty=1.05, pad_token_id=tok.eos_token_id)
+    gen = tok.decode(out[0, ids.shape[1]:], skip_special_tokens=True).strip()
+    return {"claims": _parse_claim_json(gen, sent)}
+
+
+# --- Tier 4: Lookback-Lens attention grounding ----------------------------------------------
+def do_lookback(req):
+    torch = _torch()
+    tok, model = get_lookback()
+    context = req["context"]
+    candidate = req["candidate"]
+    spans = req.get("spans")  # [[start,end],...] char offsets into candidate; optional
+    thr = float(req.get("threshold", 0.10))
+
+    ctx_ids = tok(context, return_tensors="pt", truncation=True, max_length=1024).input_ids
+    sep_ids = tok("\n\n", return_tensors="pt", add_special_tokens=False).input_ids
+    cand_enc = tok(candidate, return_tensors="pt", add_special_tokens=False,
+                   return_offsets_mapping=True, truncation=True, max_length=1024)
+    cand_ids = cand_enc.input_ids
+    offsets = cand_enc["offset_mapping"][0].tolist()
+    input_ids = torch.cat([ctx_ids, sep_ids, cand_ids], dim=1)
+    n_ctx = ctx_ids.shape[1] + sep_ids.shape[1]
+    n_cand = cand_ids.shape[1]
+
+    with torch.no_grad():
+        out = model(input_ids, output_attentions=True, use_cache=False)
+    atts = out.attentions
+    if not atts or atts[0] is None:
+        return {"error": "model does not expose attentions (use an eager-attention model)"}
+
+    # per-candidate-token lookback = mean over all layers & heads of attention mass on the context
+    lb = [0.0] * n_cand
+    L = len(atts)
+    for layer in atts:
+        a = layer[0]                              # (H, T, T)
+        ctx_mass = a[:, :, :n_ctx].sum(dim=-1)    # (H, T)
+        total = a.sum(dim=-1).clamp(min=1e-9)     # (H, T) ~1
+        ratio = (ctx_mass / total).mean(dim=0)    # (T,)
+        for j in range(n_cand):
+            lb[j] += float(ratio[n_ctx + j])
+    lb = [v / L for v in lb]
+
+    if not spans:
+        spans = [[0, len(candidate)]]
+    results = []
+    for cs, ce in spans:
+        toks = [lb[j] for j, (a, b) in enumerate(offsets) if b > cs and a < ce and b > a]
+        if not toks:
+            continue
+        score = sum(toks) / len(toks)
+        results.append({"start": cs, "end": ce, "lookback": round(score, 4), "grounded": score >= thr})
+    return {"spans": results, "threshold": thr, "n_ctx_tokens": n_ctx, "n_cand_tokens": n_cand}
+
+
+HANDLERS = {"nli": do_nli, "perplexity": do_perplexity, "spans": do_spans,
+            "decompose": do_decompose, "lookback": do_lookback}
 
 
 def main():
@@ -114,7 +250,8 @@ def main():
             req = json.loads(line)
             task = req.get("task")
             if task == "ping":
-                resp = {"ok": True, "models": {"nli": NLI_MODEL, "ppl": PPL_MODEL, "gliner": GLINER_MODEL}}
+                resp = {"ok": True, "models": {"nli": NLI_MODEL, "ppl": PPL_MODEL, "gliner": GLINER_MODEL,
+                                               "decomp": DECOMP_MODEL, "lookback": LOOKBACK_MODEL}}
             elif task in HANDLERS:
                 resp = HANDLERS[task](req)
             else:

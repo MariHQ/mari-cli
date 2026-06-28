@@ -39,6 +39,10 @@ export const FIX_EXAMPLES = {
   'no-space-em-dash': { bad: 'the build — slow as it is — passed', good: 'the build—slow as it is—passed' },
   'sentence-case-heading': { bad: '## A Comprehensive Overview Of The System', good: '## A comprehensive overview of the system' },
   'word-swap': { bad: 'We leverage the e-mail pipeline.', good: 'We use the email pipeline.' },
+  'ap-serial-comma': { bad: 'We shipped docs, tests, and code.', good: 'We shipped docs, tests and code.', note: 'AP omits the serial comma.' },
+  'ap-number-style': { bad: 'The release closed 9 issues.', good: 'The release closed nine issues.', note: 'AP spells out zero through nine.' },
+  'chicago-number-style': { bad: 'The group has 42 members.', good: 'The group has forty-two members.', note: 'Chicago spells out zero through one hundred.' },
+  'plain-long-sentence': { bad: '(a 22-word sentence)', good: 'Split it so each sentence stays under 20 words.' },
 };
 
 export function fixExampleFor(ruleId) { return FIX_EXAMPLES[ruleId] || null; }

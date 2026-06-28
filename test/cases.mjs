@@ -242,6 +242,20 @@ export const CASES = [
     bad: 'See the configuration section above.',
     good: 'See the configuration section in Setup.' },
 
+  // ===== Family C: AP / Chicago / plain packs =====
+  { rule: 'ap-serial-comma', pack: 'ap',
+    bad: 'We shipped docs, tests, and code.',
+    good: 'We shipped docs, tests and code.' },
+  { rule: 'ap-number-style', pack: 'ap',
+    bad: 'The release closed 9 issues.',
+    good: 'The release closed nine issues.' },
+  { rule: 'chicago-number-style', pack: 'chicago',
+    bad: 'The working group has 42 members.',
+    good: 'The working group has forty-two members.' },
+  { rule: 'plain-long-sentence', pack: 'plain',
+    bad: 'This particular sentence has been written so that it clearly contains a few more than twenty distinct words in total here today.',
+    good: 'It is short.' },
+
   // ===== Family D extras =====
   { rule: 'person-first-language',
     bad: 'He suffers from a chronic condition.',

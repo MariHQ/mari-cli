@@ -124,7 +124,7 @@ export function retrieve(cTokens, cEnts, facts) {
 }
 
 const SEV_RANK = { error: 0, warn: 1, advisory: 2 };
-const sortFindings = (fs) => fs.sort((a, b) => (SEV_RANK[a.severity] - SEV_RANK[b.severity]) || a.line - b.line);
+export const sortFindings = (fs) => fs.sort((a, b) => (SEV_RANK[a.severity] - SEV_RANK[b.severity]) || a.line - b.line);
 
 // Tier 0 (sync, deterministic): typed-span mismatch + unsupported checkable claims.
 export function factcheck(docText, facts, { sourceMode = false } = {}) {
@@ -204,6 +204,93 @@ export async function factcheckNLI(docText, facts, { sourceMode = false, nli }) 
       emit({ ruleId: 'unsupported-claim', severity: sourceMode ? 'warn' : 'advisory', offset: s.start, length: Math.min(claim.length, 70), span,
         message: `Claim "${valued.raw}" is not supported by ${sourceMode ? 'the source' : 'FACTS.md'} — verify or cite it.` });
     }
+  }
+  return sortFindings(findings);
+}
+
+// Tier 0 + Tier 2 + Tier 3: decompose each sentence into atomic claims (via `decompose`, an
+// async text→string[] fn), then ground EACH atomic claim with the same retrieve→typed-span→NLI
+// pipeline. Atomic claims are model paraphrases with no source offset, so every finding is
+// anchored to its PARENT sentence and carries the atomic claim in the message. Falls back to
+// whole-sentence grounding when decomposition yields nothing.
+export async function factcheckDecomposed(docText, facts, { sourceMode = false, nli, decompose }) {
+  const ctx = segment(docText);
+  const findings = [];
+  const emit = (f) => { const { line, col } = ctx.locate(f.offset); findings.push({ ...f, line, col, family: 'grounding', source: 'grounding' }); };
+
+  for (const s of ctx.sentences) {
+    const parent = s.text.trim();
+    if (parent.length < 12) continue;
+    // pre-filter: only pay for the LLM on sentences that could carry a checkable fact
+    if (!(typedSpans(parent).length > 0 || contentTokens(parent).length >= 4)) continue;
+
+    let claims = [];
+    try { claims = await decompose(parent); } catch { claims = []; }
+    if (!claims.length) claims = [parent];
+
+    const at = { offset: s.start, length: Math.min(parent.length, 70) };
+    for (const claim of claims) {
+      const cSpans = typedSpans(claim);
+      const cTokens = contentTokens(claim);
+      const cEnts = entities(claim);
+      const checkable = (cSpans.length > 0 || cTokens.length >= 3) && (cTokens.length >= 2 || cEnts.size >= 1);
+      if (!checkable) continue;
+      const { best, relevant } = retrieve(cTokens, cEnts, facts);
+      const span = claim.slice(0, 70).replace(/\s+/g, ' ').trim();
+
+      if (relevant) {
+        const mismatch = findMismatch(cSpans, typedSpans(best.text));
+        if (mismatch) {
+          const ruleId = (mismatch.kind === 'date' || mismatch.kind === 'year') ? 'number-date-mismatch' : 'contradicts-fact';
+          emit({ ruleId, severity: 'error', ...at, span,
+            message: `Claim "${span}" says "${mismatch.claim.raw}" but FACTS.md says "${mismatch.fact.raw}"${best.source ? ` (${best.source})` : ''}: ${best.text}` });
+          continue;
+        }
+        const verdict = await nli(best.text, claim);
+        const c = verdict.scores.contradiction ?? 0, e = verdict.scores.entailment ?? 0;
+        if (c >= 0.6 && c > e) {
+          emit({ ruleId: 'contradicts-fact', severity: 'error', ...at, span,
+            message: `Atomic claim "${span}" contradicts FACTS.md (NLI ${(c * 100).toFixed(0)}%): ${best.text}` });
+        } else if (e >= 0.55) {
+          /* entailed → supported */
+        } else {
+          emit({ ruleId: 'unsupported-claim', severity: sourceMode ? 'warn' : 'advisory', ...at, span,
+            message: `Atomic claim "${span}" not supported by ${sourceMode ? 'the source' : 'FACTS.md'} (NLI neutral): ${best.text}` });
+        }
+      } else if (cSpans.length > 0) {
+        const valued = cSpans.find((sp) => ['money', 'percent', 'year', 'date'].includes(sp.kind)) || cSpans[0];
+        emit({ ruleId: 'unsupported-claim', severity: sourceMode ? 'warn' : 'advisory', ...at, span,
+          message: `Atomic claim "${valued.raw}" is unsupported by ${sourceMode ? 'the source' : 'FACTS.md'} — verify or cite it.` });
+      }
+    }
+  }
+  // collapse identical findings produced by sibling atomic claims of the same sentence
+  const seen = new Set();
+  const deduped = findings.filter((f) => { const k = `${f.ruleId}|${f.offset}|${f.message}`; return seen.has(k) ? false : (seen.add(k), true); });
+  return sortFindings(deduped);
+}
+
+// Tier 4 (opt-in, generative): Lookback-Lens. `lookback(contextText, candidateText, spans)`
+// returns [{start,end,lookback,grounded}] over candidate char-offsets. A low-lookback span is
+// one the model didn't attend to the facts for — advisory, never an assertion of falsehood.
+export async function factcheckLookback(docText, facts, { lookback, threshold = 0.10 }) {
+  const ctx = segment(docText);
+  const contextText = facts.map((f) => f.text).join('\n');
+  if (!contextText.trim()) return [];
+  const spans = ctx.sentences
+    .filter((s) => s.text.trim().length >= 12)
+    .map((s) => ({ s, span: [s.start, s.start + s.text.length] }));
+  if (!spans.length) return [];
+  const scored = await lookback(contextText, docText, spans.map((x) => x.span), threshold);
+  const byStart = new Map(scored.map((r) => [r.start, r]));
+  const findings = [];
+  for (const { s } of spans) {
+    const r = byStart.get(s.start);
+    if (!r || r.grounded) continue;
+    const { line, col } = ctx.locate(s.start);
+    findings.push({ ruleId: 'ungrounded-span', severity: 'advisory', family: 'grounding', source: 'grounding',
+      offset: s.start, length: Math.min(s.text.trim().length, 70), line, col, span: s.text.trim().slice(0, 70),
+      message: `Reads as ungrounded in the provided facts (attention lookback ${(r.lookback * 100).toFixed(0)}%, threshold ${(threshold * 100).toFixed(0)}%) — verify it traces to a fact.` });
   }
   return sortFindings(findings);
 }

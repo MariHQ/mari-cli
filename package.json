@@ -11,7 +11,7 @@
   },
   "scripts": {
     "detect": "node cli/bin/cli.js detect",
-    "test": "node test/run.mjs && node test/integration.mjs && node test/grounding.mjs && node test/hooks.mjs",
+    "test": "node test/run.mjs && node test/integration.mjs && node test/grounding.mjs && node test/hooks.mjs && node test/strings.mjs",
     "test:models": "node test/models.mjs",
     "selftest": "node cli/bin/cli.js detect fixtures/sloppy.md"
   },

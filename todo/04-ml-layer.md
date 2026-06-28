@@ -27,7 +27,7 @@ models cover those at no meaningful cost; the generative tier covers attention-g
 *soft signal, never a verdict*. Stanford (Liang et al., *Patterns* 2023,
 [doi:10.1016/j.patter.2023.100779](https://doi.org/10.1016/j.patter.2023.100779)) found GPT
 detectors flag ~61% of non-native-English (TOEFL) essays as AI vs ~5% for native writers.
-Limpid never says "this is AI." It points at *spans worth rewriting* and emits a *style*
+Mari never says "this is AI." It points at *spans worth rewriting* and emits a *style*
 score with the caveat attached. Detection-of-authorship is explicitly a non-goal; fixing
 slop is the goal.
 

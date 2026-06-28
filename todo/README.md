@@ -1,6 +1,6 @@
-# Limpid — Build TODO
+# Mari — Build TODO
 
-Design-first plan for Limpid: a design system for text that strips AI slop and enforces
+Design-first plan for Mari: a design system for text that strips AI slop and enforces
 house style, delivered as one skill + provider hooks + a standalone deterministic CLI.
 Direct counterpart to [Impeccable](https://impeccable.style) (frontend design → prose).
 
@@ -16,7 +16,7 @@ Readability scores (Flesch-Kincaid) are deliberately **not** core — opt-in, pl
 
 ## Design docs
 
-1. [`01-skills.md`](01-skills.md) — the `limpid` skill: setup, context files, registers,
+1. [`01-skills.md`](01-skills.md) — the `Mari` skill: setup, context files, registers,
    routing, and all commands + management commands. Marks the **core (MVP)** subset.
 2. [`02-detector-rules.md`](02-detector-rules.md) — the AI-slop + clarity detector rules
    (Families A & B): id, category, detection method, severity, bad→good fixture, source.
@@ -62,7 +62,7 @@ cli/
       density.mjs                 # per-1k-word / per-N-sentence scorers
       lexicons.mjs                # wordlists (slop tiers, buzzwords, weasel, inclusive)
       style-guides.mjs            # microsoft | google | ap | chicago | plain rule packs
-      inline-ignores.mjs          # <!-- limpid-disable rule: reason -->
+      inline-ignores.mjs          # <!-- Mari-disable rule: reason -->
     findings.mjs                  # finding shape, JSON output, severity sort
 skill/
   SKILL.src.md                    # the skill (setup + routing + guidance)
@@ -83,7 +83,7 @@ Context files (parallel to impeccable's PRODUCT.md + DESIGN.md):
   approved/forbidden phrasings, reading-grade ceiling. Read by every command + the detector
   (`detector.styleGuide`, terminology consistency, banned-word lists).
 - **FACTS.md** — user-supplied ground-truth facts/claims the grounding layer checks against
-  (05-grounding.md). Editable by hand or via `npx limpid facts add "…"`.
+  (05-grounding.md). Editable by hand or via `npx Mari facts add "…"`.
 
 ## Milestones
 
