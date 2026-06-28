@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Hook library tests — payload extraction and the pre-write lint/block decision.
 
-import { proposedEdit, lintContent, targetFile } from '../skill/scripts/hook-lib.mjs';
+import { proposedEdit, lintContent, targetFile, renderForAgent } from '../skill/scripts/hook-lib.mjs';
 
 let pass = 0, fail = 0;
 const check = (name, cond) => { if (cond) pass++; else { fail++; console.log('  ✗ ' + name); } };
@@ -26,6 +26,14 @@ check('pre-write: clean content yields no findings', r2.findings.length === 0);
 
 const r3 = await lintContent(sloppy, cwd, '.json');
 check('pre-write: non-prose extension is skipped', r3.findings.length === 0);
+
+// findings come with one-shot bad→good fix exemplars
+const rendered = await renderForAgent('x.md', [
+  { line: 3, severity: 'warn', ruleId: 'bold-lead-in-list', message: '…' },
+  { line: 4, severity: 'warn', ruleId: 'marketing-buzzword', message: '…' },
+], 10);
+check('hook output includes a How-to-fix block', rendered.includes('How to fix (bad → good)'));
+check('hook output shows the bold-lead-in fix exemplar', rendered.includes('Strip the bold lead-in'));
 
 console.log(`\nHooks: ${pass + fail} checks · ${pass} passed · ${fail} failed`);
 console.log(fail === 0 ? '✓ hooks green\n' : '');

@@ -22,10 +22,10 @@ import { readStdin, lintContent, proposedEdit, renderForAgent, safe } from './ho
     const rel = fp.replace(cwd + '/', '');
     if (errors.length) {
       return block(`Mari blocked this edit — ${errors.length} error-level slop issue(s):\n` +
-        renderForAgent(rel, res.findings, res.config?.hook?.maxFindings ?? 10));
+        await renderForAgent(rel, res.findings, res.config?.hook?.maxFindings ?? 10));
     }
     // warn/advisory: allow but surface
-    return allow(renderForAgent(rel, res.findings, res.config?.hook?.maxFindings ?? 10));
+    return allow(await renderForAgent(rel, res.findings, res.config?.hook?.maxFindings ?? 10));
   } catch {
     allow();
   }

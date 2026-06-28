@@ -25,7 +25,7 @@ const QUIET_DEFAULT = true;
       return done();
     }
     const max = config?.hook?.maxFindings ?? 10;
-    emit(renderForAgent(rel, findings, max));
+    emit(await renderForAgent(rel, findings, max));
     done();
   } catch {
     done(); // never break the turn

@@ -14,7 +14,7 @@ Mari is a **design system for text**. It adds:
 
 - **One setup flow.** `/Mari init` writes `PRODUCT.md` and offers `STYLE.md` and `FACTS.md`, so every later command knows the audience, register (docs / marketing / editorial / UX microcopy), voice, banned words, terminology, the base style guide you write to (Microsoft, Google, AP, Chicago, plain language), and your ground-truth facts.
 - **21 commands.** A shared editorial vocabulary with your AI: `deslop`, `tighten`, `sharpen`, `clarify`, `critique`, `audit`, `polish`, `factcheck`, and more.
-- **A detector that runs on any machine.** Deterministic rules (regex/wordlist/density/structural) plus small local encoder models (GLiNER slop-span extraction, a BERT/DeBERTa NLI checker) — all CPU, no GPU, no API key, weights cached once. A heavier **generative model is opt-in** for attention-based fact-grounding, and `--no-models` runs pure-deterministic for offline use.
+- **A detector that runs on any machine.** Deterministic rules (regex/wordlist/density/structural) plus small local encoder models (GLiNER slop-span extraction, a BERT/DeBERTa NLI checker). Both run on CPU: no GPU, no API key, weights cached once. A heavier **generative model is opt-in** for attention-based fact-grounding, and `--no-models` runs pure-deterministic for offline use.
 
 ## What's Included
 
@@ -81,7 +81,7 @@ Or use `/Mari` directly with a description:
 
 ### Anti-Patterns
 
-The skill includes explicit guidance on what to avoid — the recognizable tells of machine prose:
+The skill includes explicit guidance on the recognizable tells of machine prose to avoid:
 
 - Don't reach for the AI vocabulary spike (*delve, tapestry, testament, underscore, leverage, seamless, robust, realm, multifaceted*)
 - Don't open with "In today's fast-paced world…" or "In the ever-evolving landscape of…"
@@ -93,7 +93,7 @@ The skill includes explicit guidance on what to avoid — the recognizable tells
 
 ## See It In Action
 
-Visit [Mari.style](https://Mari.style#casestudies) to see before/after rewrites of real AI-generated drafts — documentation, release notes, marketing copy, and UI microcopy.
+Visit [Mari.style](https://Mari.style#casestudies) to see before/after rewrites of real AI-generated drafts: documentation, release notes, marketing copy, and UI microcopy.
 
 ## Installation
 
@@ -183,7 +183,7 @@ The detector catches **91 deterministic issues** across four families:
 | **Style, formatting & citations** | 39 | sentence-case headings, contractions, second person, "please"/latinism bans (Google), terminology consistency, exclamation overuse, number style, em-dash spacing, redundant acronyms, placeholder/tracking-param citations — Microsoft & Google packs |
 | **Inclusive & accessible language** | 11 | gendered defaults, ableist terms, person-first language, inclusive tech terms (allowlist/blocklist), non-inclusive idioms, vague link text ("click here"), skipped heading levels, missing alt text |
 
-The base style guide selects which conformance rules fire — Mari ships rule packs for the **Microsoft Writing Style Guide**, the **Google developer documentation style guide**, **AP**, **Chicago**, and **plainlanguage.gov**, in the spirit of [Vale](https://vale.sh)'s style packages but tuned for AI-generated drafts.
+The base style guide selects which conformance rules fire. Mari ships rule packs for the **Microsoft Writing Style Guide**, the **Google developer documentation style guide**, **AP**, **Chicago**, and **plainlanguage.gov**, in the spirit of [Vale](https://vale.sh)'s style packages but tuned for AI-generated drafts.
 
 By default, `detect` respects the same `.Mari/config.json` and `.Mari/config.local.json` detector config as the hook: `detector.ignoreRules`, `detector.ignoreFiles`, `detector.ignoreValues`, and `detector.styleGuide`.
 
@@ -193,7 +193,7 @@ Full detector docs: [Mari.style/docs/detector](https://Mari.style/docs/detector)
 
 ## Fact-checking & grounding
 
-Style is only half the problem — the other half is confident, wrong claims. Add a `FACTS.md`
+Style is only half the problem. The other half is confident, wrong claims. Add a `FACTS.md`
 (by hand or with `npx Mari facts add "…"`) and Mari checks your prose against it:
 
 ```bash
@@ -209,7 +209,7 @@ attached. A contradiction is an error; an unsupported claim is advisory (absence
 For text generated locally with your facts in context, an **opt-in** generative model flags
 ungrounded spans from its attention (Lookback-Lens style). Everything runs on-device, no API key.
 
-Mari never claims a document "is AI-written" — detectors are biased and that's not the goal.
+Mari never claims a document "is AI-written." Detectors are biased, and that's not the goal.
 It points at spans worth rewriting and claims worth verifying.
 
 ## Supported Tools

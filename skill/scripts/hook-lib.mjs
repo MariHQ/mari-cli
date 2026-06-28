@@ -59,16 +59,28 @@ export function proposedEdit(payload) {
   return { fp, text };
 }
 
-export function renderForAgent(rel, findings, max = 10) {
+export async function renderForAgent(rel, findings, max = 10) {
   const sev = (s) => (s === 'error' ? 'error   ' : s === 'warn' ? 'warn    ' : 'advisory');
   const shown = findings.slice(0, max);
   const lines = shown.map((f) => `  L${String(f.line).padEnd(4)} ${sev(f.severity)} ${f.ruleId.padEnd(22)} ${f.message}`);
   const more = findings.length > max ? `\n  (+${findings.length - max} more — run /mari audit ${rel})` : '';
   const counts = findings.reduce((a, f) => { a[f.severity]++; return a; }, { error: 0, warn: 0, advisory: 0 });
+
+  // Attach a one-shot bad→good exemplar for each distinct rule present, so the rewrite has a
+  // concrete pattern to follow instead of guessing from the terse message.
+  const { fixExampleFor } = await import(new URL('../../cli/engine/examples.mjs', import.meta.url));
+  const distinct = [...new Set(shown.map((f) => f.ruleId))];
+  const examples = distinct.map((id) => [id, fixExampleFor(id)]).filter(([, e]) => e);
+  const fixBlock = examples.length
+    ? '\n\nHow to fix (bad → good):\n' + examples.map(([id, e]) =>
+        `  ${id}\n    ✗ ${e.bad.replace(/\n/g, '\n      ')}\n    ✓ ${e.good.replace(/\n/g, '\n      ')}` +
+        (e.note ? `\n    · ${e.note}` : '')).join('\n')
+    : '';
+
   return `Mari — ${rel}: ${findings.length} findings ` +
     `(${counts.error} error, ${counts.warn} warn, ${counts.advisory} advisory). Consider fixing before continuing.\n` +
-    lines.join('\n') + more +
-    `\nWaive a rule inline: <!-- mari-disable <rule-id>: reason -->`;
+    lines.join('\n') + more + fixBlock +
+    `\n\nWaive a rule inline: <!-- mari-disable <rule-id>: reason -->`;
 }
 
 export function safe(fn, fallback) { try { return fn(); } catch { return fallback; } }
