@@ -137,6 +137,9 @@ Each has its own `skill/reference/<command>.md`; load it before running. Grouped
 - `node cli/bin/cli.js install` — wire the Claude Code post-edit hook for this project.
 - `node cli/bin/cli.js hooks status` — show hook + ignore state.
 - `node cli/bin/cli.js ignores add-rule|add-file|add-value …` — manage detector ignores.
+- `node cli/bin/cli.js watch add <name> --paths "<glob[,…]>" --notify "<message>" [--exclude "<glob>"]` —
+  notify the agent when matching files are edited (e.g. update API docs when `src/api/**` changes);
+  `watch list` / `watch remove <name>` manage them. Fires on any edited file, not just markdown.
 - Inline waiver in any file: `<!-- mari-disable <rule-id>: reason -->`
   (`-line` / `-next-line` variants scope to one line).
 

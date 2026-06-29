@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-// Claude Code PostToolUse hook (Edit|Write|MultiEdit). Lints the edited prose file with the
-// deterministic detector and feeds findings back into the turn as additionalContext.
+// Claude Code PostToolUse hook (Edit|Write|MultiEdit). Two jobs, both fed back into the turn as
+// additionalContext: (1) lint edited *markdown* with the deterministic detector (+ optional
+// grammar + i18n staleness), and (2) fire user-defined *watch* rules on *any* edited file so the
+// agent gets reminded to do follow-up work (e.g. "the API changed — update docs/api/**").
 //
 // CONTRACT: never break the turn. Every path exits 0; on any failure we emit nothing.
 
-import { readStdin, targetFile, lint, renderForAgent, i18nNote, safe } from './hook-lib.mjs';
+import { readStdin, editedFile, targetFile, lint, renderForAgent, i18nNote, watchNotice, safe } from './hook-lib.mjs';
 
 const QUIET_DEFAULT = true;
 
@@ -12,22 +14,35 @@ const QUIET_DEFAULT = true;
   try {
     const payload = await readStdin();
     const cwd = payload?.cwd || process.cwd();
-    const fp = targetFile(payload);
+    const fp = editedFile(payload);
     if (!fp) return done();
 
-    const res = await safeAsync(() => lint(fp, cwd));
-    if (!res || res.disabled) return done();
-    const { rel, findings, config } = res;
-    const quiet = config?.hook?.quiet ?? QUIET_DEFAULT;
-    const note = await safeAsync(() => i18nNote(fp, cwd, config));
+    const parts = [];
 
-    if (!findings.length && !note) {
-      if (!quiet) emit(`Mari: ${rel} clean ✓`);
-      return done();
+    // (1) Prose detector — markdown only.
+    if (targetFile(payload)) {
+      const res = await safeAsync(() => lint(fp, cwd));
+      if (res && !res.disabled) {
+        const { rel, findings, config } = res;
+        const quiet = config?.hook?.quiet ?? QUIET_DEFAULT;
+        const note = await safeAsync(() => i18nNote(fp, cwd, config));
+        if (findings.length) {
+          const max = config?.hook?.maxFindings ?? 10;
+          parts.push(await renderForAgent(rel, findings, max));
+        } else if (note) {
+          parts.push(`Mari — ${rel}: no slop/style findings.`);
+        } else if (!quiet) {
+          parts.push(`Mari: ${rel} clean ✓`);
+        }
+        if (note) parts.push(note);
+      }
     }
-    const max = config?.hook?.maxFindings ?? 10;
-    const body = findings.length ? await renderForAgent(rel, findings, max) : `Mari — ${rel}: no slop/style findings.`;
-    emit(note ? `${body}\n\n${note}` : body);
+
+    // (2) Watch rules — any edited file (source, config, etc.).
+    const notice = await safeAsync(() => watchNotice(fp, cwd));
+    if (notice) parts.push(notice);
+
+    if (parts.length) emit(parts.join('\n\n'));
     done();
   } catch {
     done(); // never break the turn

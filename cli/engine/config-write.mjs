@@ -26,6 +26,27 @@ export function addIgnore(cfg, kind, args) {
 // honors `hook.enabled === false` (skill/scripts/hook-lib.mjs).
 export function setHookEnabled(cfg, on) { ensureHook(cfg).enabled = !!on; return cfg; }
 
+// Watch rules: when an edited file matches `paths`, the hook tells the agent to do `notify`.
+// add upserts by name; returns false on missing name/paths/notify so the caller prints usage.
+export function addWatch(cfg, { name, paths, notify, exclude } = {}) {
+  const list = Array.isArray(paths) ? paths : (paths ? [paths] : []);
+  const exc = Array.isArray(exclude) ? exclude : (exclude ? [exclude] : []);
+  if (!name || !list.length || !notify) return false;
+  cfg.watch = Array.isArray(cfg.watch) ? cfg.watch : [];
+  const rule = { name, paths: uniq(list), notify, ...(exc.length ? { exclude: uniq(exc) } : {}) };
+  const i = cfg.watch.findIndex((r) => r && r.name === name);
+  if (i >= 0) cfg.watch[i] = rule; else cfg.watch.push(rule);
+  return true;
+}
+
+// Remove a watch rule by name. Returns true if one was removed.
+export function removeWatch(cfg, name) {
+  if (!Array.isArray(cfg.watch)) return false;
+  const before = cfg.watch.length;
+  cfg.watch = cfg.watch.filter((r) => !(r && r.name === name));
+  return cfg.watch.length < before;
+}
+
 // Clear detector ignores back to defaults and drop the explicit enabled flag (so the hook
 // returns to its default-on behavior).
 export function resetConfig(cfg) {

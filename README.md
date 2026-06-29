@@ -158,6 +158,22 @@ On an interactive `install`/`update`, Mari explains the hook and offers to insta
 
 Manage the hook without editing config by hand: `mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>`. `off` pauses linting while leaving the manifest wired; `reset` clears the ignores and the enabled flag.
 
+### Watch rules — notify the agent on relevant edits
+
+Beyond prose, the hook fires **your own rules on any edited file** — source, config, schemas — so a code change can remind the agent to do the follow-up work. The classic case: when the API surface changes, update the API docs.
+
+```bash
+mari watch add api-docs \
+  --paths "src/api/**,openapi.yaml,**/*Controller.java" \
+  --notify "This edit touches the API surface. If it changed endpoints, request/response shapes, status codes, or auth, update the API docs in docs/api/**." \
+  --exclude "**/*.test.*"
+
+mari watch list
+mari watch remove api-docs
+```
+
+When an edited file matches a rule's `paths` (and none of its `exclude`), the post-edit hook injects the rule's `notify` text into the turn, so the agent — which already has the diff in context — decides whether the change actually warrants the follow-up and does it. `paths` are globs over the repo-relative path: a folder (`src/api/**`), a pattern (`**/*Controller.java`), or a bare file name matched anywhere (`openapi.yaml`). Rules live under the `watch` key of `.mari/config.json` (edit by hand or use the command); the hook applies them to every edit regardless of file type, and a disabled hook (`mari hooks off`) suppresses them too.
+
 Codex requires one platform step that mari cannot safely skip: open `/hooks` after install or update and approve the project hook.
 
 Full hook docs: [mari.style/docs/hooks](https://mari.style/docs/hooks).

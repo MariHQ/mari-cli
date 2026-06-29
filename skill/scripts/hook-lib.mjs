@@ -42,14 +42,37 @@ function severityFloor(findings, config) {
   return findings.filter((f) => (SEV_RANK[f.severity] ?? 0) >= floor);
 }
 
-// Decide the target file from a Claude Code PostToolUse payload. Returns null if nothing to lint.
+// Decide the prose target file from a Claude Code PostToolUse payload. Markdown only — returns
+// null if nothing to lint.
 export function targetFile(payload) {
-  const name = payload?.tool_name;
-  if (!['Edit', 'Write', 'MultiEdit'].includes(name)) return null;
+  const fp = editedFile(payload);
+  if (!fp || !PROSE.has(extname(fp).toLowerCase())) return null;
+  return fp;
+}
+
+// Any edited file from an Edit/Write/MultiEdit payload (any extension), if it exists on disk.
+// Watch rules fire on these — source, config, anything — not just markdown.
+export function editedFile(payload) {
+  if (!['Edit', 'Write', 'MultiEdit'].includes(payload?.tool_name)) return null;
   const fp = payload?.tool_input?.file_path;
   if (!fp || !existsSync(fp)) return null;
-  if (!PROSE.has(extname(fp).toLowerCase())) return null;
   return fp;
+}
+
+// User-defined watch rules: if the edited file matches a rule's paths, surface its notify text so
+// the agent does the follow-up (e.g. "the API changed — update docs/api/**"). Any file type.
+// Returns a formatted notice string or null. Never throws.
+export async function watchNotice(fp, cwd) {
+  try {
+    const { loadConfig, matchWatch } = await import(CONFIG);
+    const config = safe(() => loadConfig(cwd), null);
+    if (!config || config.hook?.enabled === false || !config.watch?.length) return null;
+    const rel = relative(cwd, fp) || fp;
+    const matched = matchWatch(rel, config.watch);
+    if (!matched.length) return null;
+    const lines = matched.map((r) => `  • [${r.name || 'watch'}] ${r.notify}`).join('\n');
+    return `🔔 Mari watch — \`${rel}\` was edited:\n${lines}`;
+  } catch { return null; }
 }
 
 export async function lint(fp, cwd) {
