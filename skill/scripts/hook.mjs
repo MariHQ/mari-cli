@@ -4,7 +4,7 @@
 //
 // CONTRACT: never break the turn. Every path exits 0; on any failure we emit nothing.
 
-import { readStdin, targetFile, lint, renderForAgent, safe } from './hook-lib.mjs';
+import { readStdin, targetFile, lint, renderForAgent, i18nNote, safe } from './hook-lib.mjs';
 
 const QUIET_DEFAULT = true;
 
@@ -19,13 +19,15 @@ const QUIET_DEFAULT = true;
     if (!res || res.disabled) return done();
     const { rel, findings, config } = res;
     const quiet = config?.hook?.quiet ?? QUIET_DEFAULT;
+    const note = await safeAsync(() => i18nNote(fp, cwd, config));
 
-    if (!findings.length) {
+    if (!findings.length && !note) {
       if (!quiet) emit(`Mari: ${rel} clean ✓`);
       return done();
     }
     const max = config?.hook?.maxFindings ?? 10;
-    emit(await renderForAgent(rel, findings, max));
+    const body = findings.length ? await renderForAgent(rel, findings, max) : `Mari — ${rel}: no slop/style findings.`;
+    emit(note ? `${body}\n\n${note}` : body);
     done();
   } catch {
     done(); // never break the turn

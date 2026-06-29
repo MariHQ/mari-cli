@@ -252,6 +252,43 @@ hook. When you work on a detected asset, the `/mari` skill loads the matching re
 (`skill/reference/asset-<type>.md`) and applies its structure, tone, and rubric on top of the
 register.
 
+## Localized docs (i18n)
+
+When a doc has translations, editing the source should remind you the translations are now
+stale. Mari maps a markdown file to its localized siblings across the common layouts, and the
+editor hook surfaces them after a source edit:
+
+```text
+🌐 1 localized version(s) may be stale after this edit — update to match:
+  zh      docs/content.zh/docs/deployment/elastic_scaling.md
+```
+
+```bash
+npx mari i18n README.md   # list a doc's translations (or, from a translation, its source)
+```
+
+Built-in layouts (any subset via `i18n.layouts`):
+
+| Layout | Source ↔ translation | Seen in |
+|--------|----------------------|---------|
+| `suffix` | `README.md` ↔ `README.es.md` / `README.zh-CN.md` | most repos |
+| `hugo` | `content/…` ↔ `content.zh/…` | Flink |
+| `docusaurus` | `docs/x.md` ↔ `i18n/<locale>/docusaurus-plugin-content-docs/current/x.md` | Docusaurus sites |
+| `dir` | `docs/en/x.md` ↔ `docs/fr/x.md` | locale-dir repos |
+
+It's **expandable** — add org-specific layouts in `.mari/config.json` without code:
+
+```json
+{ "i18n": {
+    "defaultLocale": "en",
+    "notifyOn": "source",
+    "mirrors": [{ "source": "src/locales/en", "translation": "src/locales/{locale}" }]
+} }
+```
+
+Only translations that actually exist on disk are reported (it never invents files), and the
+note fires on **source** edits by default (`notifyOn: "any"` also nudges on translation edits).
+
 ## Supported Tools
 
 - [Cursor](https://cursor.com)

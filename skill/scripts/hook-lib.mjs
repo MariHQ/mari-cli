@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 const ENGINE = new URL('../../cli/engine/index.mjs', import.meta.url);
 const CONFIG = new URL('../../cli/engine/config.mjs', import.meta.url);
+const I18N = new URL('../../cli/engine/i18n.mjs', import.meta.url);
 
 export async function readStdin() {
   try {
@@ -91,6 +92,24 @@ export async function renderForAgent(rel, findings, max = 10) {
     `(${counts.error} error, ${counts.warn} warn, ${counts.advisory} advisory). Consider fixing before continuing.\n` +
     lines.join('\n') + more + fixBlock +
     `\n\nWaive a rule inline: <!-- mari-disable <rule-id>: reason -->`;
+}
+
+// When the edited file belongs to a localized set, remind the agent which translations may now
+// be stale. Source-only by default (translators don't need nagging); set i18n.notifyOn:"any" to
+// also fire on translation edits. Returns null when there's nothing to say.
+export async function i18nNote(fp, cwd, config) {
+  try {
+    const { i18nAssociations } = await import(I18N);
+    const a = i18nAssociations(fp, cwd, config);
+    if (!a || !a.siblings.length) return null;
+    const notifyOn = (config?.raw?.i18n || config?.i18n || {}).notifyOn || 'source';
+    if (!a.isSource && notifyOn !== 'any') return null;
+    const list = a.siblings.map((s) => `  ${String(s.locale).padEnd(7)} ${s.rel}`).join('\n');
+    const head = a.isSource
+      ? `🌐 ${a.siblings.length} localized version(s) may be stale after this edit — update to match:`
+      : `🌐 This is the ${a.locale} translation; the source and other locales may need the same change:`;
+    return `${head}\n${list}`;
+  } catch { return null; }
 }
 
 export function safe(fn, fallback) { try { return fn(); } catch { return fallback; } }

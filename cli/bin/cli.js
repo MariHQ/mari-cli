@@ -19,6 +19,7 @@ import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGen
 import { segment } from '../engine/segment.mjs';
 import * as LEX from '../engine/lexicons.mjs';
 import { detectAssetType, validateAsset, scaffold, ASSET_TYPES } from '../engine/assets.mjs';
+import { i18nAssociations } from '../engine/i18n.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -43,6 +44,7 @@ async function main() {
     case 'factcheck': return await runFactcheck();
     case 'facts': return facts();
     case 'asset': return asset();
+    case 'i18n': return i18n();
     case 'live': return live();
     case undefined:
     case '--help':
@@ -418,6 +420,23 @@ function asset() {
   console.error(`Usage: mari asset detect <file> | check <file> | scaffold <${types}> [title]`); process.exit(2);
 }
 
+// i18n association: list the translations of a doc (or the source, if a translation is given)
+// across the common localization layouts. Powers the hook's "translations may be stale" note.
+function i18n() {
+  const target = positionals()[0];
+  if (!target || !existsSync(target)) { console.error('Usage: mari i18n <file>'); process.exit(2); }
+  const root = process.cwd();
+  const abs = target.startsWith('/') ? target : join(root, target);
+  const config = flag('no-config') ? null : loadConfig(root);
+  // Resolve against the file's own absolute location (root="") so it works for any target,
+  // inside cwd or not. The hook passes the project root for clean relative paths.
+  const a = i18nAssociations(abs, '', config);
+  if (!a) { console.log(`No localized siblings found for ${target}.`); return; }
+  console.log(`${a.isSource ? 'Source' : `Translation (${a.locale})`} · layout: ${a.layout} · source: ${a.sourceRel}`);
+  console.log(`${a.siblings.length} localized sibling(s)${a.isSource ? ' that may need updating' : ''}:`);
+  for (const s of a.siblings) console.log(`  ${String(s.locale).padEnd(7)} ${s.rel}`);
+}
+
 const PINNABLE = new Set(['audit', 'deslop', 'tighten', 'clarify', 'critique', 'polish', 'document', 'draft', 'outline', 'glossary', 'sharpen', 'soften', 'harden', 'voice', 'cadence', 'format', 'delight', 'adapt', 'localize', 'live', 'factcheck']);
 
 function pin(create) {
@@ -451,6 +470,7 @@ Usage:
   mari install [--providers=claude,cursor,codex,copilot] [--force]   Wire editor hooks
   mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
+  mari i18n <file>        List a doc's localized siblings (translations to keep in sync)
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut
