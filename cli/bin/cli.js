@@ -505,6 +505,7 @@ function i18nConformCmd() {
     for (const d of drift) { if (d.severity === 'warn') warns++; console.log(`    ${d.severity === 'warn' ? '⚠' : '·'} ${d.message}`); }
   }
   console.log(`\n${clean}/${translations.length} in sync · ${warns} structural drift(s).`);
+  console.log(`Tip: conform a whole tree in one pass — \`mari i18n conform <dir>\` (don't loop per file).`);
   process.exit(flag('strict') && warns > 0 ? 1 : 0);
 }
 
