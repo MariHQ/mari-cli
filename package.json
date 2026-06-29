@@ -13,12 +13,19 @@
     "detect": "node cli/bin/cli.js detect",
     "test": "node test/run.mjs && node test/integration.mjs && node test/grounding.mjs && node test/hooks.mjs && node test/strings.mjs && node test/assets.mjs && node test/i18n.mjs",
     "test:models": "node test/models.mjs",
+    "test:grammar": "node test/grammar.mjs",
     "selftest": "node cli/bin/cli.js detect fixtures/sloppy.md"
+  },
+  "optionalDependencies": {
+    "harper.js": "^2.4.0"
   },
   "license": "Apache-2.0",
   "files": [
     "cli",
     "skill",
     "ml"
-  ]
+  ],
+  "dependencies": {
+    "harper.js": "^2.4.0"
+  }
 }

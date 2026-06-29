@@ -8,6 +8,20 @@ import { pathToFileURL } from 'node:url';
 const ENGINE = new URL('../../cli/engine/index.mjs', import.meta.url);
 const CONFIG = new URL('../../cli/engine/config.mjs', import.meta.url);
 const I18N = new URL('../../cli/engine/i18n.mjs', import.meta.url);
+const GRAMMAR = new URL('../../cli/engine/grammar.mjs', import.meta.url);
+
+// Optional grammar + mechanics pass (Harper WASM). Off unless hook.grammar / detector.grammar is
+// set. Opt-in because it loads an ~18 MB WASM blob; the deterministic path never touches it.
+// Findings merge in at warn severity so the agent — which already has the file in context after
+// an edit — can correct broken English in the same turn. Never throws.
+async function grammarFindings(text, config) {
+  if (!(config?.hook?.grammar || config?.detector?.grammar)) return [];
+  try {
+    const { detectGrammar } = await import(GRAMMAR);
+    const g = await detectGrammar(text);
+    return config?.ignoreRules ? g.filter((f) => !config.ignoreRules.has(f.ruleId)) : g;
+  } catch { return []; }
+}
 
 export async function readStdin() {
   try {
@@ -46,7 +60,8 @@ export async function lint(fp, cwd) {
   const rel = relative(cwd, fp) || fp;
   if (config && fileIgnored(rel, config.ignoreFiles)) return { findings: [] };
   const text = readFileSync(fp, 'utf8');
-  const findings = severityFloor(detectText(text, { config }), config);
+  const findings = severityFloor(detectText(text, { config }), config)
+    .concat(severityFloor(await grammarFindings(text, config), config));
   return { rel, findings, config };
 }
 
@@ -58,7 +73,9 @@ export async function lintContent(text, cwd, ext = '.md') {
   const { loadConfig } = await import(CONFIG);
   const config = safe(() => loadConfig(cwd), null);
   if (config?.hook?.enabled === false) return { disabled: true, findings: [] };
-  return { findings: severityFloor(detectText(text, { config }), config), config };
+  const findings = severityFloor(detectText(text, { config }), config)
+    .concat(severityFloor(await grammarFindings(text, config), config));
+  return { findings, config };
 }
 
 // Extract the proposed file path + content from a pre-write payload (provider-tolerant).

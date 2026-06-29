@@ -8,6 +8,7 @@ export const FAMILY_LABELS = {
   clarity: 'Clarity & concision',
   style: 'Style-guide conformance',
   inclusive: 'Inclusive & accessible',
+  grammar: 'Grammar & mechanics',
 };
 
 export function esc(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }

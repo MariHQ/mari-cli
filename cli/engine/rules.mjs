@@ -425,4 +425,5 @@ export const FAMILY_LABELS = {
   style: 'Style-guide conformance',
   inclusive: 'Inclusive & accessible',
   grounding: 'Grounding & factuality',
+  grammar: 'Grammar & mechanics',
 };

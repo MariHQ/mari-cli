@@ -117,6 +117,26 @@ async function detect() {
       } catch { /* ml failures never break detection */ }
     }
   }
+
+  // Opt-in grammar + mechanics pass (Harper WASM). Off by default; the default detector stays
+  // pure-deterministic. Enable per-run with --grammar or per-project with detector.grammar.
+  const useGrammar = flag('grammar') || config?.detector?.grammar;
+  if (useGrammar) {
+    const { grammarAvailable, detectGrammar } = await import('../engine/grammar.mjs');
+    if (!(await grammarAvailable())) {
+      console.error('(--grammar needs the optional Harper engine — run: npm install harper.js)');
+    } else {
+      console.error('(grammar pass — Harper, ~0.4s to load then a few ms per doc…)');
+      for (const r of results) {
+        if (!r.text) continue;
+        try {
+          let g = await detectGrammar(r.text);
+          if (config?.ignoreRules?.size) g = g.filter((f) => !config.ignoreRules.has(f.ruleId));
+          if (g.length) r.findings = r.findings.concat(g);
+        } catch { /* grammar failures never break detection */ }
+      }
+    }
+  }
   if (wantScore || asJson) {
     for (const r of results) {
       const machine = useModels ? await safeMachine(r.text || '') : null;
@@ -763,7 +783,7 @@ function usage() {
   console.log(`mari — deterministic AI-slop + house-style detector (MVP)
 
 Usage:
-  mari detect <path|.> [--json] [--summary] [--score] [--strict] [--quiet] [--stdin] [--style=microsoft|google|ap|chicago|plain] [--models] [--no-config]
+  mari detect <path|.> [--json] [--summary] [--score] [--strict] [--quiet] [--stdin] [--style=microsoft|google|ap|chicago|plain] [--models] [--grammar] [--no-config]
   mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value>
   mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--ground=attention]   Check claims vs FACTS.md
   mari facts list | add "<fact>"                                Manage the fact base
