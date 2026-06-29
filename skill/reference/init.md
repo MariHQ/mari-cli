@@ -14,7 +14,16 @@ on `NO_PRODUCT_MD`.
 5. **Offer `STYLE.md`** — base style guide, terminology glossary (preferred term + forbidden
    variants), formatting rules, approved/forbidden phrasings.
 6. **Offer the hook** — run `node cli/bin/cli.js install` (Claude Code post-edit hook).
-7. **Recommend next commands** — usually `audit` then `deslop`.
+7. **Discover rules** — run `node cli/bin/cli.js rules discover --json`. It scans the repo for
+   code↔docs couplings (API surface ↔ API docs, schema/migrations ↔ data-model docs, CLI ↔ usage
+   docs, config/env ↔ config reference, monorepo packages ↔ per-package README). Also read the
+   repo structure yourself and infer couplings the scan misses (e.g. a `proto/` dir paired with
+   generated client docs, a public SDK entrypoint, a feature-flags file). For each candidate, show
+   the user the paths + proposed notify message; let them keep/edit/drop it; add the accepted ones
+   with `node cli/bin/cli.js rules add <name> --paths "…" --notify "…" [--exclude "…"]`. The point:
+   when code changes, the hook reminds the agent to update the matching docs. Don't add a rule the
+   user hasn't confirmed; skip this step if the repo has no clear code↔docs structure.
+8. **Recommend next commands** — usually `audit` then `deslop`.
 
 ## PRODUCT.md skeleton
 ```markdown

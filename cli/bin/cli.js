@@ -11,7 +11,7 @@ import { fileURLToPath as _f2u } from 'node:url';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../engine/config.mjs';
-import { addIgnore, setHookEnabled, resetConfig, addWatch, removeWatch } from '../engine/config-write.mjs';
+import { addIgnore, setHookEnabled, resetConfig, addRule, removeRule } from '../engine/config-write.mjs';
 import { detectText, detectTarget, PROSE_EXT } from '../engine/index.mjs';
 import { extname } from 'node:path';
 import { renderHuman, renderJSON, renderSummary, summarize } from '../engine/findings.mjs';
@@ -57,7 +57,7 @@ async function main() {
     case 'install': return install();
     case 'update': return update();
     case 'hooks': return hooks();
-    case 'watch': return watch();
+    case 'rules': return await rulesCmd();
     case 'pin': return pin(true);
     case 'unpin': return pin(false);
     case 'factcheck': return await runFactcheck();
@@ -345,27 +345,53 @@ function hooks() {
   console.error(HOOKS_USAGE); process.exit(2);
 }
 
-const WATCH_USAGE = `Usage:
-  mari watch list
-  mari watch add <name> --paths "<glob[,glob…]>" --notify "<message>" [--exclude "<glob[,glob…]>"]
-  mari watch remove <name>
+const RULES_USAGE = `Usage:
+  mari rules list
+  mari rules discover [--json] [--write]
+  mari rules add <name> --paths "<glob[,glob…]>" --notify "<message>" [--exclude "<glob[,glob…]>"]
+  mari rules remove <name>
 
 When an edited file matches a rule's paths, the post-edit hook reminds the agent to do <message>
 — e.g. update API docs when the API surface changes. Paths are globs over the repo-relative path
-(folders: "src/api/**", patterns: "**/*Controller.java", or a bare file name: "openapi.yaml").`;
+(folders: "src/api/**", patterns: "**/*Controller.java", or a bare file name: "openapi.yaml").
+discover scans the repo for code↔docs couplings and proposes rules (--write adds them all).`;
 
 function splitList(s) { return (s || '').split(',').map((x) => x.trim()).filter(Boolean); }
 
-function watch() {
+async function rulesCmd() {
   const root = process.cwd();
   const sub = rest[0];
 
   if (sub === 'list' || sub === undefined) {
-    const rules = loadConfig(root).watch || [];
-    if (!rules.length) { console.log('No watch rules. Add one:\n  ' + WATCH_USAGE.split('\n')[2].trim()); return; }
-    for (const r of rules) {
+    const defined = loadConfig(root).rules || [];
+    if (!defined.length) { console.log('No rules. Add one:\n  ' + RULES_USAGE.split('\n')[3].trim()); return; }
+    for (const r of defined) {
       console.log(`• ${r.name}`);
       console.log(`    paths  : ${(r.paths || []).join(', ')}`);
+      if (r.exclude?.length) console.log(`    exclude: ${r.exclude.join(', ')}`);
+      console.log(`    notify : ${r.notify}`);
+    }
+    return;
+  }
+
+  if (sub === 'discover') {
+    const { discoverRules } = await import('../engine/rules-discover.mjs');
+    const found = discoverRules(root);
+    if (flag('json')) { console.log(JSON.stringify(found, null, 2)); return; }
+    if (!found.length) { console.log('No code↔docs couplings discovered. Add a rule by hand:\n  ' + RULES_USAGE.split('\n')[3].trim()); return; }
+    if (flag('write')) {
+      const p = ensureMariDir(root);
+      const cfg = readMari(p);
+      let n = 0;
+      for (const r of found) if (addRule(cfg, r)) n++;
+      writeMari(p, cfg);
+      console.log(`Added ${n} discovered rule(s) to ${p}.`);
+      return;
+    }
+    console.log(`Discovered ${found.length} candidate rule(s) — review, then add with \`mari rules add …\` (or rerun with --write):\n`);
+    for (const r of found) {
+      console.log(`• ${r.name}  (${r.rationale})`);
+      console.log(`    paths  : ${r.paths.join(', ')}`);
       if (r.exclude?.length) console.log(`    exclude: ${r.exclude.join(', ')}`);
       console.log(`    notify : ${r.notify}`);
     }
@@ -377,20 +403,20 @@ function watch() {
 
   if (sub === 'add') {
     const name = positionals()[1];
-    const ok = addWatch(cfg, { name, paths: splitList(opt('paths')), notify: opt('notify'), exclude: splitList(opt('exclude')) });
-    if (!ok) { console.error(WATCH_USAGE); process.exit(2); }
+    const ok = addRule(cfg, { name, paths: splitList(opt('paths')), notify: opt('notify'), exclude: splitList(opt('exclude')) });
+    if (!ok) { console.error(RULES_USAGE); process.exit(2); }
     writeMari(path, cfg);
-    console.log(`Added watch rule "${name}" (${path}).`);
+    console.log(`Added rule "${name}" (${path}).`);
     return;
   }
   if (sub === 'remove' || sub === 'rm') {
     const name = positionals()[1];
-    if (!name || !removeWatch(cfg, name)) { console.error(`No watch rule named "${name}".`); process.exit(2); }
+    if (!name || !removeRule(cfg, name)) { console.error(`No rule named "${name}".`); process.exit(2); }
     writeMari(path, cfg);
-    console.log(`Removed watch rule "${name}" (${path}).`);
+    console.log(`Removed rule "${name}" (${path}).`);
     return;
   }
-  console.error(WATCH_USAGE); process.exit(2);
+  console.error(RULES_USAGE); process.exit(2);
 }
 
 async function runFactcheck() {
@@ -839,7 +865,7 @@ Usage:
   mari install [--providers=claude,cursor,codex,copilot] [--force]   Wire editor hooks + install the skill
   mari update             Refresh the installed skill + hooks from this repo
   mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>
-  mari watch list | add <name> --paths "<glob[,…]>" --notify "<message>" [--exclude "<glob>"] | remove <name>   Notify the agent on matching edits (e.g. update API docs)
+  mari rules list | discover | add <name> --paths "<glob[,…]>" --notify "<message>" [--exclude "<glob>"] | remove <name>   Notify the agent on matching edits (e.g. update API docs)
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
   mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)

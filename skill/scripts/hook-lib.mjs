@@ -51,7 +51,7 @@ export function targetFile(payload) {
 }
 
 // Any edited file from an Edit/Write/MultiEdit payload (any extension), if it exists on disk.
-// Watch rules fire on these — source, config, anything — not just markdown.
+// Edit rules fire on these — source, config, anything — not just markdown.
 export function editedFile(payload) {
   if (!['Edit', 'Write', 'MultiEdit'].includes(payload?.tool_name)) return null;
   const fp = payload?.tool_input?.file_path;
@@ -59,19 +59,19 @@ export function editedFile(payload) {
   return fp;
 }
 
-// User-defined watch rules: if the edited file matches a rule's paths, surface its notify text so
+// User-defined edit rules: if the edited file matches a rule's paths, surface its notify text so
 // the agent does the follow-up (e.g. "the API changed — update docs/api/**"). Any file type.
 // Returns a formatted notice string or null. Never throws.
-export async function watchNotice(fp, cwd) {
+export async function rulesNotice(fp, cwd) {
   try {
-    const { loadConfig, matchWatch } = await import(CONFIG);
+    const { loadConfig, matchRules } = await import(CONFIG);
     const config = safe(() => loadConfig(cwd), null);
-    if (!config || config.hook?.enabled === false || !config.watch?.length) return null;
+    if (!config || config.hook?.enabled === false || !config.rules?.length) return null;
     const rel = relative(cwd, fp) || fp;
-    const matched = matchWatch(rel, config.watch);
+    const matched = matchRules(rel, config.rules);
     if (!matched.length) return null;
-    const lines = matched.map((r) => `  • [${r.name || 'watch'}] ${r.notify}`).join('\n');
-    return `🔔 Mari watch — \`${rel}\` was edited:\n${lines}`;
+    const lines = matched.map((r) => `  • [${r.name || 'rule'}] ${r.notify}`).join('\n');
+    return `🔔 Mari — \`${rel}\` was edited:\n${lines}`;
   } catch { return null; }
 }
 

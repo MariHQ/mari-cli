@@ -81,8 +81,9 @@ The eight below are the most-used; each has a `skill/reference/<command>.md` wit
 One-time setup. Ask the user their **register** (docs / marketing / editorial / microcopy) and
 **base style guide** (default Microsoft). Sample existing files to infer current voice. Write
 `PRODUCT.md` (audience, register, voice in 3 words, anti-references, banned words). Offer to
-create `STYLE.md` and to install the editor hook (`node cli/bin/cli.js install`). Then recommend
-next commands.
+create `STYLE.md` and to install the editor hook (`node cli/bin/cli.js install`). Run
+`node cli/bin/cli.js rules discover` and propose any code↔docs rules it finds (plus ones you
+infer) for the user to confirm. Then recommend next commands.
 
 ### `document`
 Reverse of `init`: read the project's *good* existing writing and generate a `STYLE.md` (voice,
@@ -137,9 +138,10 @@ Each has its own `skill/reference/<command>.md`; load it before running. Grouped
 - `node cli/bin/cli.js install` — wire the Claude Code post-edit hook for this project.
 - `node cli/bin/cli.js hooks status` — show hook + ignore state.
 - `node cli/bin/cli.js ignores add-rule|add-file|add-value …` — manage detector ignores.
-- `node cli/bin/cli.js watch add <name> --paths "<glob[,…]>" --notify "<message>" [--exclude "<glob>"]` —
+- `node cli/bin/cli.js rules add <name> --paths "<glob[,…]>" --notify "<message>" [--exclude "<glob>"]` —
   notify the agent when matching files are edited (e.g. update API docs when `src/api/**` changes);
-  `watch list` / `watch remove <name>` manage them. Fires on any edited file, not just markdown.
+  `rules discover` proposes some from the repo, `rules list` / `rules remove <name>` manage them.
+  Fires on any edited file, not just markdown.
 - Inline waiver in any file: `<!-- mari-disable <rule-id>: reason -->`
   (`-line` / `-next-line` variants scope to one line).
 
