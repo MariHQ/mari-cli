@@ -316,21 +316,21 @@ The bundle ships prebuilt — users never compile; only the GGUF model is suppli
 
 ```bash
 mari i18n conform docs                       # fast structural sweep (0.5s) — the default
-mari i18n conform docs --attention --limit 5 # + attention on the 5 worst-drifted docs
-mari i18n conform setup.md --attention       # localize skipped prose in one doc
-mari factcheck draft.md --source facts.md --attention   # flag sentences disconnected from the facts
+mari i18n conform docs --deep --limit 5 # + attention on the 5 worst-drifted docs
+mari i18n conform setup.md --deep       # localize skipped prose in one doc
+mari factcheck draft.md --source facts.md --deep   # flag sentences disconnected from the facts
 ```
 
-- `i18n conform --attention` adds prose-coverage to its structural check — so a doc with matching
+- `i18n conform --deep` adds prose-coverage to its structural check — so a doc with matching
   headings but an *untranslated paragraph* (which structure can't catch) is still flagged. In the
   sweep it runs only on the drifted docs, **worst-drift first**, capped by `--limit N` (default 10).
-- `factcheck --attention` adds **grounding** — doc as query, facts/`--source` as context — flagging
+- `factcheck --deep` adds **grounding** — doc as query, facts/`--source` as context — flagging
   sentences **disconnected** from the facts (fabricated/off-topic; an Eiffel-Tower sentence against
   software facts drops to ~20%). It complements NLI factchecking, which catches *on-topic
   contradictions* attention can't. `factcheck doc.md --source impl.cpp` is the doc↔code check.
 
 The model auto-resolves from `MARI_ATTN_MODEL`, `.mari/config.json` (`"attn":{"model":…}`), or a
-GGUF discovered in `~/.mari/models` / `~/attn/cpp/models` (preferring Qwen3.5-0.8B). `--attention`
+GGUF discovered in `~/.mari/models` / `~/attn/cpp/models` (preferring Qwen3.5-0.8B). `--deep`
 **errors** (exit 2) if no binary/model is available, so it never silently falls back.
 
 Built-in layouts (any subset via `i18n.layouts`):
