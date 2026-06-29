@@ -38,6 +38,7 @@ async function main() {
     case 'detect': return await detect();
     case 'ignores': return ignores();
     case 'install': return install();
+    case 'update': return update();
     case 'hooks': return hooks();
     case 'pin': return pin(true);
     case 'unpin': return pin(false);
@@ -165,11 +166,48 @@ function install() {
     // default: Claude Code always, plus any other provider whose dir already exists
     names = ['claude', ...Object.keys(PROVIDERS).filter((n) => n !== 'claude' && existsSync(join(root, PROVIDERS[n].dir)))];
   }
+  for (const p of writeSkill(root)) console.log(`  ✓ skill → ${p}`);
   for (const name of names) {
     try { PROVIDERS[name].wire(root); }
     catch (e) { console.error(`  ✗ ${name}: ${e.message}`); }
   }
   console.log('\nReload each harness (Claude Code: /hooks) for the hook to take effect.');
+}
+
+// Build the installed SKILL.md from skill/SKILL.src.md: the skill is read in place from this
+// repo, so rewrite its relative script/reference/CLI paths to absolute ones rooted here.
+function buildSkill(root) {
+  const src = readFileSync(join(root, 'skill', 'SKILL.src.md'), 'utf8');
+  return src
+    .replace(/\bskill\/scripts\//g, `${root}/skill/scripts/`)
+    .replace(/\bskill\/reference\//g, `${root}/skill/reference/`)
+    .replace(/\bcli\/bin\/cli\.js\b/g, `${root}/cli/bin/cli.js`);
+}
+// Where the skill lives: refresh every existing install (global ~/.claude and/or project
+// .claude); if none exists yet, install globally.
+function skillTargets(root) {
+  const home = process.env.HOME || '';
+  const cands = [join(home, '.claude', 'skills', 'mari'), join(root, '.claude', 'skills', 'mari')];
+  const existing = cands.filter((d) => existsSync(join(d, 'SKILL.md')));
+  return existing.length ? existing : [cands[0]];
+}
+function writeSkill(root) {
+  const content = buildSkill(root);
+  const written = [];
+  for (const dir of skillTargets(root)) { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'SKILL.md'), content); written.push(join(dir, 'SKILL.md')); }
+  return written;
+}
+
+// `mari update` — refresh an existing install: rebuild the skill payload from this repo and
+// re-wire the project hooks (idempotent). What `install` does, minus the first-time prompts.
+function update() {
+  const root = process.cwd();
+  if (!existsSync(join(root, 'skill', 'SKILL.src.md'))) { console.error('Run `mari update` from the Mari repo root.'); process.exit(2); }
+  console.log('Refreshing Mari…');
+  for (const p of writeSkill(root)) console.log(`  ✓ skill → ${p}`);
+  const names = ['claude', ...Object.keys(PROVIDERS).filter((n) => n !== 'claude' && existsSync(join(root, PROVIDERS[n].dir)))];
+  for (const name of names) { try { PROVIDERS[name].wire(root); } catch (e) { console.error(`  ✗ ${name}: ${e.message}`); } }
+  console.log('\nReload the harness to pick up the refreshed skill + commands.');
 }
 
 function readJsonOrAbort(path) {
@@ -498,7 +536,8 @@ Usage:
   mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value>
   mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--ground=attention]   Check claims vs FACTS.md
   mari facts list | add "<fact>"                                Manage the fact base
-  mari install [--providers=claude,cursor,codex,copilot] [--force]   Wire editor hooks
+  mari install [--providers=claude,cursor,codex,copilot] [--force]   Wire editor hooks + install the skill
+  mari update             Refresh the installed skill + hooks from this repo
   mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
   mari i18n <file> | conform <file>   List a doc's translations, or check they share the source's structure
