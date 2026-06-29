@@ -57,8 +57,12 @@ of ground truth — run it first so every edit is grounded in concrete findings,
 - **First word is a deterministic command** (`detect`, `audit`, `asset`, `i18n`) → run the CLI
   directly, skipping the setup phase (no `PRODUCT.md` needed):
   - `asset detect|check|scaffold <file>` → `node cli/bin/cli.js asset <sub> <target>`
-  - `i18n <file>` → list a doc's translations; `i18n conform <file>` → check every translation
+  - `i18n <file>` → list a doc's translations; `i18n conform <file|dir>` → check every translation
     shares the source's structure (`node cli/bin/cli.js i18n conform <target>`). "i8n" means i18n.
+    This is deterministic and fast, so run it on a whole tree freely. The deeper **attention**
+    pass (which prose a translation skipped) is opt-in and costs ~3s/doc. Add `--attention` only
+    when asked. On a tree, cap it with `--limit N` (e.g. `i18n conform docs --attention --limit 5`)
+    or target a single file. Don't run `--attention` across a large tree unprompted.
   - `detect`/`audit <file>` → run the detector and report.
 - **First word is an editing command** (`init`, `document`, `draft`, `outline`, `glossary`,
   `critique`, `deslop`, `tighten`, `clarify`, `polish`, `sharpen`, `soften`, `harden`, `voice`,

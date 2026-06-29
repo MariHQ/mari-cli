@@ -312,23 +312,26 @@ binary once (needs a local llama.cpp), then point `MARI_ATTN_MODEL` at a GGUF.
 
 The bundle ships prebuilt — users never compile; only the GGUF model is supplied at runtime.
 
-**It runs by default, woven into the commands.** Point Mari at a multilingual GGUF once — set
-`MARI_ATTN_MODEL`, or `"attn": { "model": "…gguf" }` in `.mari/config.json` to install it per
-project — and the attention layer runs automatically (no flag); without it, the commands stay
-fast and deterministic.
+**It's opt-in, woven into existing commands** (it costs ~3s/doc, so it never runs unless asked):
 
-- `mari i18n conform` adds prose-coverage to its structural check — so a doc with matching
+```bash
+mari i18n conform docs                       # fast structural sweep (0.5s) — the default
+mari i18n conform docs --attention --limit 5 # + attention on the 5 worst-drifted docs
+mari i18n conform setup.md --attention       # localize skipped prose in one doc
+mari factcheck draft.md --source facts.md --attention   # flag sentences disconnected from the facts
+```
+
+- `i18n conform --attention` adds prose-coverage to its structural check — so a doc with matching
   headings but an *untranslated paragraph* (which structure can't catch) is still flagged. In the
-  sweep it runs only on the drifted docs, to localize which prose is behind.
-- `mari factcheck` appends attention **grounding** — doc as query, facts/`--source` as context —
-  flagging sentences **disconnected** from the facts (fabricated or off-topic; e.g. a sentence
-  about the Eiffel Tower against software facts drops to ~20%). It complements NLI factchecking,
-  which catches *on-topic contradictions* attention can't. `mari factcheck doc.md --source impl.cpp`
-  is the doc↔code check.
+  sweep it runs only on the drifted docs, **worst-drift first**, capped by `--limit N` (default 10).
+- `factcheck --attention` adds **grounding** — doc as query, facts/`--source` as context — flagging
+  sentences **disconnected** from the facts (fabricated/off-topic; an Eiffel-Tower sentence against
+  software facts drops to ~20%). It complements NLI factchecking, which catches *on-topic
+  contradictions* attention can't. `factcheck doc.md --source impl.cpp` is the doc↔code check.
 
-`--no-attention` skips it; `--attention` **forces** it and **errors** (exit 2) if the binary or
-model isn't available — so a run that's supposed to use attention fails loudly instead of
-silently falling back to structural/deterministic-only.
+The model auto-resolves from `MARI_ATTN_MODEL`, `.mari/config.json` (`"attn":{"model":…}`), or a
+GGUF discovered in `~/.mari/models` / `~/attn/cpp/models` (preferring Qwen3.5-0.8B). `--attention`
+**errors** (exit 2) if no binary/model is available, so it never silently falls back.
 
 Built-in layouts (any subset via `i18n.layouts`):
 

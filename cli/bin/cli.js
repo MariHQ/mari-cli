@@ -30,7 +30,7 @@ const rest = argv.slice(1);
 
 // Value-taking options accept both `--opt=value` and `--opt value`. Listed so positionals()
 // can skip a space-form value and not mistake it for a positional argument.
-const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model']);
+const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model', 'limit']);
 function flag(name) { return rest.includes(`--${name}`); }
 function opt(name, def = null) {
   const eq = rest.find((a) => a.startsWith(`--${name}=`));
@@ -327,7 +327,7 @@ function hooks() {
 async function runFactcheck() {
   const root = process.cwd();
   const target = positionals()[0];
-  if (!target || !existsSync(target)) { console.error('Usage: mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--attention|--no-attention]'); process.exit(2); }
+  if (!target || !existsSync(target)) { console.error('Usage: mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--attention]'); process.exit(2); }
   const sourcePath = opt('source');
   const factsFilePath = sourcePath || join(root, 'FACTS.md'); // for default-on attention grounding
   const withAttn = attnDecision(); // --attention forces (errors if it can't); --no-attention skips
@@ -578,19 +578,19 @@ function attnReady() {
   const m = attnModel();
   return existsSync(mariAttnBin()) && !!m && existsSync(m);
 }
-// Decide whether to run attention. Default-on when available; `--attention` FORCES it and errors
-// loudly if it can't run; `--no-attention` disables it. Call once per command.
+// Attention is OPT-IN (it costs ~3s/doc). It runs only with `--attention`, which errors loudly
+// if it can't — so the LLM/user controls exactly when to pay for it. Default is fast/structural.
 function attnDecision() {
-  if (flag('attention') && !attnReady()) {
+  if (!flag('attention')) return false;
+  if (!attnReady()) {
     const why = !existsSync(mariAttnBin())
       ? `the native attention binary isn't shipped for ${process.platform}-${process.arch} (set MARI_ATTN_BIN or build native/attn)`
-      : `no model is configured (set MARI_ATTN_MODEL or "attn":{"model":"…gguf"} in .mari/config.json)`;
+      : `no model found (set MARI_ATTN_MODEL, "attn":{"model":…} in .mari/config.json, or drop a GGUF in ~/.mari/models)`;
     console.error(`--attention: cannot run — ${why}.`);
     process.exit(2);
   }
-  const on = !flag('no-attention') && (flag('attention') || attnReady());
-  if (on) console.error(`(attention ON — model: ${attnModel().split('/').pop()}; ~3s/doc, this is the slow part)`);
-  return on;
+  console.error(`(attention ON — model: ${attnModel().split('/').pop()}; ~3s/doc)`);
+  return true;
 }
 // Run coverage for one source→translation pair and print the dropped passages, indented under
 // the current doc (used by `i18n conform --attention` to localize the prose behind a drift).
@@ -649,7 +649,7 @@ function i18n() {
 // code blocks, links). Mari can't translate — this keeps the docs structurally in lockstep.
 function i18nConformCmd() {
   const target = positionals()[1];
-  if (!target || !existsSync(target)) { console.error('Usage: mari i18n conform <file|dir> [--attention|--no-attention]'); process.exit(2); }
+  if (!target || !existsSync(target)) { console.error('Usage: mari i18n conform <file|dir> [--attention [--limit N]]'); process.exit(2); }
   const root = process.cwd();
   const abs = target.startsWith('/') ? target : join(root, target);
   const config = flag('no-config') ? null : loadConfig(root);
@@ -677,7 +677,7 @@ function i18nConformCmd() {
     if (withAttn) printCoverageUnder(srcAbs, t.rel, srcText, thr); // localize the skipped prose
   }
   console.log(`\n${clean}/${translations.length} structurally in sync · ${warns} structural drift(s).`);
-  if (!attnReady()) console.log(`Tip: set MARI_ATTN_MODEL to also localize which prose the translation skipped (attention).`);
+  if (!withAttn) console.log(`Tip: add --attention to localize which prose the translation skipped (~3s, opt-in).`);
   process.exit(flag('strict') && warns > 0 ? 1 : 0);
 }
 
@@ -712,17 +712,29 @@ function i18nConformSweep(dir, config) {
     if (fileDrift.length) { drifted++; reports.push({ f, srcText, fileDrift }); } else clean++;
   }
   if (!sources) { console.log(`No localized source docs found under ${shortenPath(dir)}.`); return; }
+  // --attention runs on the drifted docs only, worst-drift first, capped by --limit (default 10
+  // so a big tree doesn't grind for minutes). The structural report still covers every drift.
+  let attnSet = null;
+  if (withAttn) {
+    const sev = (r) => r.fileDrift.reduce((s, fd) => s + fd.warns.reduce((a, w) => {
+      const m = w.message.match(/(\d+)\D+?(\d+)/); return a + (m ? Math.abs(+m[1] - +m[2]) : 1);
+    }, 0), 0);
+    const limit = opt('limit') != null ? parseInt(opt('limit'), 10) : 10;
+    const ranked = [...reports].sort((a, b) => sev(b) - sev(a));
+    attnSet = new Set(limit > 0 ? ranked.slice(0, limit) : ranked);
+  }
   for (const r of reports) {
     console.log(`\n${shortenPath(r.f)}`);
+    const doAttn = withAttn && attnSet.has(r);
     for (const fd of r.fileDrift) {
       console.log(`  ${String(fd.t.locale).padEnd(7)} ${shortenPath(fd.t.rel)}`);
       for (const w of fd.warns) console.log(`    ⚠ ${w.message}`);
-      if (withAttn) printCoverageUnder(r.f, fd.t.rel, r.srcText, thr); // localize the skipped prose
+      if (doAttn) printCoverageUnder(r.f, fd.t.rel, r.srcText, thr); // localize the skipped prose
     }
   }
   console.log(`\n${sources} localized source doc(s) · ${clean} in sync · ${drifted} with structural drift.`);
-  if (withAttn) console.log(`(attention localized prose drops on the ${drifted} drifted docs; pass a single file to check a structurally-clean one)`);
-  else if (!attnReady()) console.log(`Tip: set MARI_ATTN_MODEL to also localize skipped prose (attention).`);
+  if (withAttn) console.log(`(attention localized prose on the ${attnSet.size} worst-drifted of ${drifted}; use --limit N or run a single file)`);
+  else console.log(`Tip: add --attention to localize skipped prose (worst-drifted first; --limit N to cap; ~3s/doc).`);
   process.exit(flag('strict') && drifted > 0 ? 1 : 0);
 }
 
