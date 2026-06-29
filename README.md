@@ -326,7 +326,9 @@ fast and deterministic.
   which catches *on-topic contradictions* attention can't. `mari factcheck doc.md --source impl.cpp`
   is the doc↔code check.
 
-Pass `--no-attention` to skip it.
+`--no-attention` skips it; `--attention` **forces** it and **errors** (exit 2) if the binary or
+model isn't available — so a run that's supposed to use attention fails loudly instead of
+silently falling back to structural/deterministic-only.
 
 Built-in layouts (any subset via `i18n.layouts`):
 

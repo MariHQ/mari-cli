@@ -327,9 +327,10 @@ function hooks() {
 async function runFactcheck() {
   const root = process.cwd();
   const target = positionals()[0];
-  if (!target || !existsSync(target)) { console.error('Usage: mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--no-attention]'); process.exit(2); }
+  if (!target || !existsSync(target)) { console.error('Usage: mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--attention|--no-attention]'); process.exit(2); }
   const sourcePath = opt('source');
   const factsFilePath = sourcePath || join(root, 'FACTS.md'); // for default-on attention grounding
+  const withAttn = attnDecision(); // --attention forces (errors if it can't); --no-attention skips
 
   let facts, sourceMode = false;
   if (sourcePath) {
@@ -379,12 +380,15 @@ async function runFactcheck() {
   // Attention grounding runs by default when available (binary + MARI_ATTN_MODEL): it flags
   // sentences disconnected from the facts (fabricated/off-topic), complementing the deterministic
   // and NLI checks above. --no-attention opts out.
-  if (!flag('json') && !flag('no-attention') && attnReady() && existsSync(factsFilePath)) {
+  if (!flag('json') && withAttn && existsSync(factsFilePath)) {
     const res = runMariAttn(factsFilePath, target, { grounding: true, threshold: parseFloat(opt('threshold') || '0.3'), querySegment: 'sentence' });
-    if (!res.error) {
+    if (res.error) { if (flag('attention')) { console.error(res.error); process.exit(2); } }
+    else {
       console.log(`\nGrounding (attention) vs ${shortenPath(factsFilePath)}:`);
       printAttnFindings(res.out.flagged || [], docText, 'every sentence attends to the facts');
     }
+  } else if (flag('attention') && !existsSync(factsFilePath)) {
+    console.error('--attention grounding needs facts: add FACTS.md or pass --source <file>.'); process.exit(2);
   }
   const s = summarize(results);
   process.exit(s.error > 0 || (flag('strict') && s.warn > 0) ? 1 : 0);
@@ -543,6 +547,18 @@ function attnReady() {
   const m = attnModel();
   return existsSync(mariAttnBin()) && !!m && existsSync(m);
 }
+// Decide whether to run attention. Default-on when available; `--attention` FORCES it and errors
+// loudly if it can't run; `--no-attention` disables it. Call once per command.
+function attnDecision() {
+  if (flag('attention') && !attnReady()) {
+    const why = !existsSync(mariAttnBin())
+      ? `the native attention binary isn't shipped for ${process.platform}-${process.arch} (set MARI_ATTN_BIN or build native/attn)`
+      : `no model is configured (set MARI_ATTN_MODEL or "attn":{"model":"…gguf"} in .mari/config.json)`;
+    console.error(`--attention: cannot run — ${why}.`);
+    process.exit(2);
+  }
+  return !flag('no-attention') && (flag('attention') || attnReady());
+}
 // Run coverage for one source→translation pair and print the dropped passages, indented under
 // the current doc (used by `i18n conform --attention` to localize the prose behind a drift).
 function printCoverageUnder(srcAbs, transRel, srcText, thr) {
@@ -600,7 +616,7 @@ function i18n() {
 // code blocks, links). Mari can't translate — this keeps the docs structurally in lockstep.
 function i18nConformCmd() {
   const target = positionals()[1];
-  if (!target || !existsSync(target)) { console.error('Usage: mari i18n conform <file|dir>'); process.exit(2); }
+  if (!target || !existsSync(target)) { console.error('Usage: mari i18n conform <file|dir> [--attention|--no-attention]'); process.exit(2); }
   const root = process.cwd();
   const abs = target.startsWith('/') ? target : join(root, target);
   const config = flag('no-config') ? null : loadConfig(root);
@@ -613,8 +629,9 @@ function i18nConformCmd() {
   const fromSource = i18nAssociations(srcAbs, '', config);
   const translations = fromSource ? fromSource.siblings : [];
   if (!translations.length) { console.log('No translations to conform.'); return; }
-  // Attention coverage runs by default when available (binary + MARI_ATTN_MODEL); --no-attention opts out.
-  const withAttn = !flag('no-attention') && attnReady();
+  // Attention coverage: default-on when available; --attention forces (errors if it can't),
+  // --no-attention skips. (See attnDecision.)
+  const withAttn = attnDecision();
   const thr = parseFloat(opt('threshold') || '0.3');
   const srcText = readFileSync(srcAbs, 'utf8');
   console.log(`Conforming source ${shortenPath(srcAbs)} against ${translations.length} translation(s)${withAttn ? ' (+ attention)' : ''}:`);
@@ -645,7 +662,7 @@ function* walkMd(dir) {
 // Repo-wide conform: walk a tree ONCE (one Node process), conform every localized SOURCE doc
 // against its translations. Reports only structural (warn) drift to stay actionable at scale.
 function i18nConformSweep(dir, config) {
-  const withAttn = !flag('no-attention') && attnReady(); // default-on when available
+  const withAttn = attnDecision(); // default-on; --attention forces/errors; --no-attention skips
   const thr = parseFloat(opt('threshold') || '0.3');
   let sources = 0, clean = 0, drifted = 0;
   const reports = [];
