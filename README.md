@@ -312,8 +312,10 @@ binary once (needs a local llama.cpp), then point `MARI_ATTN_MODEL` at a GGUF.
 
 The bundle ships prebuilt — users never compile; only the GGUF model is supplied at runtime.
 
-**It runs by default, woven into the commands.** Whenever `MARI_ATTN_MODEL` is set, the attention
-layer runs automatically (no flag); without it, the commands stay fast and deterministic.
+**It runs by default, woven into the commands.** Point Mari at a multilingual GGUF once — set
+`MARI_ATTN_MODEL`, or `"attn": { "model": "…gguf" }` in `.mari/config.json` to install it per
+project — and the attention layer runs automatically (no flag); without it, the commands stay
+fast and deterministic.
 
 - `mari i18n conform` adds prose-coverage to its structural check — so a doc with matching
   headings but an *untranslated paragraph* (which structure can't catch) is still flagged. In the

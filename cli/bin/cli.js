@@ -499,15 +499,21 @@ const shortenPath = (p) => String(p).replace(process.env.HOME || '~~', '~');
 // ungrounded sentences). Runs the shipped, relocatable native binary; opt-in via MARI_ATTN_MODEL.
 function mariAttnBin() {
   const attn = join(dirname(_f2u(import.meta.url)), '..', '..', 'native', 'attn');
-  const shipped = join(attn, 'dist', `${process.platform}-${process.arch}`, 'mari_attn'); // prebuilt
+  const shipped = join(attn, 'dist', `${process.platform}-${process.arch}`, 'mari_attn'); // prebuilt, shipped
   const built = join(attn, 'build', 'mari_attn');
   return process.env.MARI_ATTN_BIN || (existsSync(shipped) ? shipped : built);
 }
+// The model can be set via MARI_ATTN_MODEL or `.mari/config.json` ("attn": { "model": "…gguf" }),
+// so it's configured once per project rather than passed every time.
+function attnModel() {
+  if (process.env.MARI_ATTN_MODEL) return process.env.MARI_ATTN_MODEL;
+  try { const c = loadConfig(process.cwd()); return c.raw?.attn?.model || c.raw?.i18n?.attn?.model || null; } catch { return null; }
+}
 function runMariAttn(ctxFile, qryFile, { grounding = false, threshold = 0.3, querySegment = 'paragraph' } = {}) {
   const bin = mariAttnBin();
-  const model = process.env.MARI_ATTN_MODEL;
+  const model = attnModel();
   if (!existsSync(bin)) return { error: `attention binary not shipped for ${process.platform}-${process.arch}; set MARI_ATTN_BIN or build native/attn (see native/attn/README.md).` };
-  if (!model || !existsSync(model)) return { error: 'set MARI_ATTN_MODEL to a multilingual GGUF model (e.g. a Qwen *.gguf).' };
+  if (!model || !existsSync(model)) return { error: 'set MARI_ATTN_MODEL (or attn.model in .mari/config.json) to a multilingual GGUF model.' };
   const r = spawnSync(bin, ['--model', model, '--context', ctxFile, '--query', qryFile,
     '--query-glob', extname(qryFile).slice(1) || 'md', grounding ? '--mari-grounding' : '--mari-coverage',
     '--context-segment', 'phrase', '--phrase-tokens', '10', '--query-segment', querySegment,
@@ -534,7 +540,8 @@ function printAttnFindings(flagged, fileText, label) {
 }
 // Is the attention layer usable (shipped/built binary + a model)? Checked once before a slow loop.
 function attnReady() {
-  return existsSync(mariAttnBin()) && !!process.env.MARI_ATTN_MODEL && existsSync(process.env.MARI_ATTN_MODEL);
+  const m = attnModel();
+  return existsSync(mariAttnBin()) && !!m && existsSync(m);
 }
 // Run coverage for one source→translation pair and print the dropped passages, indented under
 // the current doc (used by `i18n conform --attention` to localize the prose behind a drift).
