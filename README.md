@@ -1,6 +1,6 @@
 # Mari
 
-Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 91 deterministic detector rules for AI-generated prose.
+Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 95 deterministic detector rules for AI-generated prose.
 
 > **Quick start:** From your project root, run `npx mari install`, then run `/mari init` inside your AI coding or writing tool. Full docs: [mari.style](https://mari.style).
 
@@ -154,6 +154,8 @@ The installer preserves unrelated hook entries and settings. If a hook manifest 
 
 On an interactive `install`/`update`, Mari explains the hook and offers to install it (default yes). Your choice is remembered per-developer in the gitignored `.mari/config.local.json`, so you are not asked again; `--no-hooks` skips it for that run without recording anything. Hook lifecycle settings live under the `hook` key of `.mari/config.json`; detector ignores live under `detector`, shared by `/mari hooks` and `npx mari detect`.
 
+Manage the hook without editing config by hand: `mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>`. `off` pauses linting while leaving the manifest wired; `reset` clears the ignores and the enabled flag.
+
 Codex requires one platform step that mari cannot safely skip: open `/hooks` after install or update and approve the project hook.
 
 Full hook docs: [mari.style/docs/hooks](https://mari.style/docs/hooks).
@@ -172,15 +174,20 @@ npx mari detect --no-config docs/       # raw scan, ignoring project config/cont
 npx mari ignores list                   # show detector ignores
 npx mari ignores add-file "vendor/**"
 npx mari ignores add-value overused-word delve --reason "Quoting a source"
+npx mari hooks off                      # pause the editor hook (config only; manifest stays wired)
+npx mari hooks ignore-rule em-dash-overuse   # mute a rule for the hook; `mari hooks reset` clears it
+npx mari live draft.md --n=3            # iterate one sentence: a tighter variant + its flags
 ```
 
-The detector catches **91 deterministic issues** across four families:
+`detect` reads **markdown** (`.md`, `.markdown`, `.mdx`, `.mdc`); directory scans skip everything else.
+
+The detector catches **95 deterministic issues** across four families:
 
 | Family | Rules | Examples |
 |--------|------:|----------|
 | **AI-slop tells** | 29 | overused vocabulary (*delve / meticulous / underscore*, weighted by measured over-use), cliché openers, manufactured contrast ("not just X — it's Y"), the "despite challenges… continues to" closer, significance/legacy boilerplate, conclusion-that-restates, vague attribution, em-dash overuse, smart quotes in plaintext, emoji bullets, assistant meta-phrases ("I hope this helps"), bold-lead-in lists, tricolon density, transition/conversational scaffolding |
 | **Clarity & concision** | 12 | passive voice, long sentences, wordy phrases ("in order to" → "to"), zombie nouns, adverb overuse, reading-grade ceiling, weasel words, undefined jargon |
-| **Style, formatting & citations** | 39 | sentence-case headings, contractions, second person, "please"/latinism bans (Google), terminology consistency, exclamation overuse, number style, em-dash spacing, redundant acronyms, placeholder/tracking-param citations — Microsoft & Google packs |
+| **Style, formatting & citations** | 43 | sentence-case headings, contractions, second person, "please"/latinism bans (Google), terminology consistency, exclamation overuse, number style, em-dash spacing, redundant acronyms, placeholder/tracking-param citations — plus per-pack rules: AP omits the serial comma + spells one–nine, Chicago spells zero–one hundred, plain-language sentence-length ceiling (Microsoft / Google / AP / Chicago / plain packs) |
 | **Inclusive & accessible language** | 11 | gendered defaults, ableist terms, person-first language, inclusive tech terms (allowlist/blocklist), non-inclusive idioms, vague link text ("click here"), skipped heading levels, missing alt text |
 
 The base style guide selects which conformance rules fire. mari ships rule packs for the **Microsoft Writing Style Guide**, the **Google developer documentation style guide**, **AP**, **Chicago**, and **plainlanguage.gov**, in the spirit of [Vale](https://vale.sh)'s style packages but tuned for AI-generated drafts.
@@ -198,16 +205,20 @@ Style is only half the problem. The other half is confident, wrong claims. Add a
 
 ```bash
 npx mari facts add "mari's CLI is 'npx mari detect', not 'mari scan'."
-npx mari factcheck README.md                 # check claims against FACTS.md
+npx mari factcheck README.md                  # check claims against FACTS.md
 npx mari factcheck draft.md --source notes.md # check a summary against its source
+npx mari factcheck draft.md --decompose       # split each sentence into atomic claims, check each
+npx mari factcheck draft.md --source notes.md --ground=attention  # flag ungrounded spans (Lookback-Lens)
 ```
 
 It runs cheapest-first: a deterministic pass aligns numbers, dates, and named entities between
 your text and your facts (the wrong-number tell), then a small local NLI model (CPU, runs by
 default) labels each claim **Supported / Contradicted / Unsupported** with the evidence line
 attached. A contradiction is an error; an unsupported claim is advisory (absence isn't disproof).
-For text generated locally with your facts in context, an **opt-in** generative model flags
-ungrounded spans from its attention (Lookback-Lens style). Everything runs on-device, no API key.
+Two **opt-in** generative tiers go deeper, both on-device and no API key: `--decompose` breaks
+each sentence into atomic claims (Qwen2.5-0.5B-Instruct) so one bad clause in a true sentence is
+caught, and `--ground=attention` runs a Lookback-Lens pass (Qwen3-0.6B) that flags spans the
+model never attended to your facts for. The generative models download once (~2 GB) and cache.
 
 mari never claims a document "is AI-written." Detectors are biased, and that's not the goal.
 It points at spans worth rewriting and claims worth verifying.
