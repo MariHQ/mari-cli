@@ -473,9 +473,13 @@ function i18nCoverageCmd() {
   if (!srcF || !existsSync(srcF)) { console.error('Usage: mari i18n coverage <source> [translation]'); process.exit(2); }
   const root = process.cwd();
   const here = dirname(_f2u(import.meta.url));
-  const bin = process.env.MARI_ATTN_BIN || join(here, '..', '..', 'native', 'attn', 'build', 'mari_attn');
+  const attn = join(here, '..', '..', 'native', 'attn');
+  const plat = `${process.platform}-${process.arch}`; // e.g. darwin-arm64
+  const shipped = join(attn, 'dist', plat, 'mari_attn'); // prebuilt, relocatable — no compile
+  const built = join(attn, 'build', 'mari_attn');
+  const bin = process.env.MARI_ATTN_BIN || (existsSync(shipped) ? shipped : built);
   const model = process.env.MARI_ATTN_MODEL;
-  if (!existsSync(bin)) { console.error(`Coverage needs the native extractor. Build it:\n  cmake -S native/attn -B native/attn/build && cmake --build native/attn/build --target mari_attn\nor set MARI_ATTN_BIN.`); process.exit(2); }
+  if (!existsSync(bin)) { console.error(`Coverage isn't shipped for your platform (${plat}). Set MARI_ATTN_BIN to a mari_attn binary, or build native/attn (see native/attn/README.md).`); process.exit(2); }
   if (!model || !existsSync(model)) { console.error('Set MARI_ATTN_MODEL to a multilingual GGUF model (e.g. a Qwen *.gguf).'); process.exit(2); }
   const thr = opt('threshold') || '0.3';
 

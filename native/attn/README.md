@@ -9,6 +9,16 @@ entry point added. Builds two binaries against a local llama.cpp checkout:
   emits Mari findings JSON (flagged low-coverage source spans the translation likely dropped).
   No heatmap reparsing — the coverage is computed in C++ and printed as findings.
 
-Build (needs a built llama.cpp at the CMake `LLAMA_DIR`):
-    cmake -S . -B build && cmake --build build -j
-Then: `mari i18n coverage <source.md> <translation.md>` drives `mari_attn`.
+## Shipping
+
+Users do NOT compile this. A relocatable, ad-hoc-signed bundle is committed under
+`dist/<platform>/` (the binary plus its dylibs, rpaths rewritten to `@loader_path`), and the
+Mari CLI runs `dist/${process.platform}-${process.arch}/mari_attn` directly. Only a multilingual
+GGUF model is supplied at runtime via `MARI_ATTN_MODEL` (models are too large to vendor).
+
+To (re)build the bundle for a platform (needs a built llama.cpp at the CMake `LLAMA_DIR`):
+
+    cmake -S . -B build && cmake --build build --target mari_attn
+    ./bundle.sh        # → dist/<platform>/
+
+`mari i18n coverage <source.md> <translation.md>` then drives the shipped `mari_attn`.
