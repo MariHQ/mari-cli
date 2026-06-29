@@ -5,7 +5,7 @@
 //   mari install   [--scope=project]   (wire the Claude Code hook)
 //   mari hooks status
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../engine/config.mjs';
@@ -482,10 +482,12 @@ function i18n() {
 // code blocks, links). Mari can't translate — this keeps the docs structurally in lockstep.
 function i18nConformCmd() {
   const target = positionals()[1];
-  if (!target || !existsSync(target)) { console.error('Usage: mari i18n conform <file>'); process.exit(2); }
+  if (!target || !existsSync(target)) { console.error('Usage: mari i18n conform <file|dir>'); process.exit(2); }
   const root = process.cwd();
   const abs = target.startsWith('/') ? target : join(root, target);
   const config = flag('no-config') ? null : loadConfig(root);
+  // Directory → one-process sweep (don't pay Node startup per file).
+  if (statSync(abs).isDirectory()) return i18nConformSweep(abs, config);
   const a = i18nAssociations(abs, '', config);
   if (!a) { console.log(`No localized siblings found for ${target}.`); return; }
   // Always conform from the source: gather every translation in the set.
@@ -504,6 +506,46 @@ function i18nConformCmd() {
   }
   console.log(`\n${clean}/${translations.length} in sync · ${warns} structural drift(s).`);
   process.exit(flag('strict') && warns > 0 ? 1 : 0);
+}
+
+const MD_EXT = /\.(md|mdx|mdc|markdown)$/i;
+function* walkMd(dir) {
+  let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) yield* walkMd(p);
+    else if (MD_EXT.test(e.name)) yield p;
+  }
+}
+
+// Repo-wide conform: walk a tree ONCE (one Node process), conform every localized SOURCE doc
+// against its translations. Reports only structural (warn) drift to stay actionable at scale.
+function i18nConformSweep(dir, config) {
+  let sources = 0, clean = 0, drifted = 0;
+  const reports = [];
+  for (const f of walkMd(dir)) {
+    const a = i18nAssociations(f, '', config);
+    if (!a || !a.isSource || !a.siblings.length) continue; // act once, from the source only
+    sources++;
+    const srcText = readFileSync(f, 'utf8');
+    const fileDrift = [];
+    for (const t of a.siblings) {
+      const warns = i18nConform(srcText, readFileSync(t.rel, 'utf8')).filter((d) => d.severity === 'warn');
+      if (warns.length) fileDrift.push({ t, warns });
+    }
+    if (fileDrift.length) { drifted++; reports.push({ f, fileDrift }); } else clean++;
+  }
+  if (!sources) { console.log(`No localized source docs found under ${shortenPath(dir)}.`); return; }
+  for (const r of reports) {
+    console.log(`\n${shortenPath(r.f)}`);
+    for (const fd of r.fileDrift) {
+      console.log(`  ${String(fd.t.locale).padEnd(7)} ${shortenPath(fd.t.rel)}`);
+      for (const w of fd.warns) console.log(`    ⚠ ${w.message}`);
+    }
+  }
+  console.log(`\n${sources} localized source doc(s) · ${clean} in sync · ${drifted} with structural drift.`);
+  process.exit(flag('strict') && drifted > 0 ? 1 : 0);
 }
 
 const PINNABLE = new Set(['audit', 'deslop', 'tighten', 'clarify', 'critique', 'polish', 'document', 'draft', 'outline', 'glossary', 'sharpen', 'soften', 'harden', 'voice', 'cadence', 'format', 'delight', 'adapt', 'localize', 'live', 'factcheck']);
@@ -540,7 +582,7 @@ Usage:
   mari update             Refresh the installed skill + hooks from this repo
   mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
-  mari i18n <file> | conform <file>   List a doc's translations, or check they share the source's structure
+  mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut

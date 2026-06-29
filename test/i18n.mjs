@@ -7,6 +7,7 @@ import { i18nAssociations, i18nConform } from '../cli/engine/i18n.mjs';
 import { i18nNote } from '../skill/scripts/hook-lib.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), 'i18n-fixtures');
 let pass = 0, fail = 0;
@@ -65,6 +66,26 @@ const transCodeChanged = '# Título\n## Configuración\n```js\nx = 2\n```\n## Us
 check('conform: changed code content is advisory', i18nConform(src, transCodeChanged).some((x) => x.severity === 'advisory' && /code block/.test(x.message)));
 const transLinkGone = '# Título\n## Configuración\n```js\nx = 1\n```\n## Uso\nsin enlace';
 check('conform: missing external link is advisory', i18nConform(src, transLinkGone).some((x) => /external link/.test(x.message)));
+
+// directory sweep: one pass over the fixture tree finds each layout's source and conforms it
+function* walk(dir) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith('.')) continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) yield* walk(p); else if (/\.(md|mdx)$/.test(e.name)) yield p;
+  }
+}
+let sources = 0, inSync = 0;
+for (const f of walk(ROOT)) {
+  const a = i18nAssociations(f, ROOT, {});
+  if (!a || !a.isSource || !a.siblings.length) continue;
+  sources++;
+  const drift = a.siblings.flatMap((t) => i18nConform(readFileSync(f, 'utf8'), readFileSync(join(ROOT, t.rel), 'utf8'))).filter((d) => d.severity === 'warn');
+  if (!drift.length) inSync++;
+}
+check('sweep finds every layout source once', sources >= 4, `(${sources})`);
+check('sweep conforms each only from the source (no double-count)', sources <= 5, `(${sources})`);
+check('in-sync fixtures report no structural drift', inSync === sources, `(${inSync}/${sources})`);
 
 console.log(`\ni18n: ${pass + fail} checks · ${pass} passed · ${fail} failed`);
 console.log(fail === 0 ? '✓ i18n green\n' : '');
