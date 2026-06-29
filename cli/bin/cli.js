@@ -63,7 +63,6 @@ async function main() {
     case 'facts': return facts();
     case 'asset': return asset();
     case 'i18n': return i18n();
-    case 'attention': return attentionCmd();
     case 'live': return live();
     case undefined:
     case '--help':
@@ -535,23 +534,6 @@ function printAttnFindings(flagged, fileText, label) {
   }
 }
 
-// `mari attention <context-file> <query-file> [--grounding]` — the raw primitive, for docs↔code
-// drift, summary fidelity, or any "does this text engage that text" check.
-function attentionCmd() {
-  const ctxF = positionals()[0], qryF = positionals()[1];
-  if (!ctxF || !existsSync(ctxF) || !qryF || !existsSync(qryF)) { console.error('Usage: mari attention <context-file> <query-file> [--grounding] [--threshold 0.3]'); process.exit(2); }
-  const root = process.cwd();
-  const grounding = flag('grounding');
-  const ctxAbs = ctxF.startsWith('/') ? ctxF : join(root, ctxF);
-  const qryAbs = qryF.startsWith('/') ? qryF : join(root, qryF);
-  const res = runMariAttn(ctxAbs, qryAbs, { grounding, threshold: parseFloat(opt('threshold') || '0.3'), querySegment: grounding ? 'sentence' : 'paragraph' });
-  if (res.error) { console.error(res.error); process.exit(2); }
-  const flagged = res.out.flagged || [];
-  console.log(`${grounding ? 'Grounding' : 'Coverage'}: ${shortenPath(qryAbs)} ${grounding ? 'vs' : '→'} ${shortenPath(ctxAbs)}`);
-  printAttnFindings(flagged, readFileSync(grounding ? qryAbs : ctxAbs, 'utf8'), grounding ? 'every passage attends to the context' : 'the query covers the context');
-  process.exit(flag('strict') && flagged.length ? 1 : 0);
-}
-
 // `mari i18n coverage` — coverage mode with the SOURCE as context and the TRANSLATION as query.
 function i18nCoverageCmd() {
   const srcF = positionals()[1], transArg = positionals()[2];
@@ -699,7 +681,6 @@ Usage:
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
   mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)
-  mari attention <context> <query> [--grounding]   Attention coverage/grounding between two docs (docs↔code, summary fidelity, …)
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut

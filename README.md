@@ -312,18 +312,18 @@ binary once (needs a local llama.cpp), then point `MARI_ATTN_MODEL` at a GGUF.
 
 The bundle ships prebuilt — users never compile; only the GGUF model is supplied at runtime.
 
-**One primitive, several uses.** Coverage is the i18n wiring of a general attention check —
-"how much does query text engage context text?" The same binary is exposed directly:
+**The same engine powers `factcheck`.** "How much does query text engage context text?" run the
+other way — doc as query, facts/source as context — flags sentences **disconnected** from the
+facts:
 
 ```bash
-mari attention <context> <query>              # coverage: context spans the query ignored (docs↔code drift)
-mari attention <context> <query> --grounding  # grounding: query rows that ignore the context
-mari factcheck draft.md --source facts.md --attention   # flag sentences disconnected from the facts
+mari factcheck draft.md --source facts.md --attention   # flag sentences with no basis in the facts
+mari factcheck doc.md   --source impl.cpp  --attention   # doc↔code: claims the code doesn't back
 ```
 
-`--attention` grounding flags content **disconnected** from the facts (fabricated or off-topic —
-e.g. a sentence about the Eiffel Tower against software facts drops to ~20% attention). It
-complements NLI factchecking, which catches *on-topic contradictions* attention can't.
+`--attention` catches fabricated or off-topic content (e.g. a sentence about the Eiffel Tower
+against software facts drops to ~20% attention). It complements NLI factchecking, which catches
+*on-topic contradictions* attention can't.
 
 Built-in layouts (any subset via `i18n.layouts`):
 
