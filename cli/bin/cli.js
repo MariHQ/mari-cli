@@ -507,11 +507,42 @@ function mariAttnBin() {
   const built = join(attn, 'build', 'mari_attn');
   return process.env.MARI_ATTN_BIN || (existsSync(shipped) ? shipped : built);
 }
-// The model can be set via MARI_ATTN_MODEL or `.mari/config.json` ("attn": { "model": "…gguf" }),
-// so it's configured once per project rather than passed every time.
+// Resolve the GGUF model: MARI_ATTN_MODEL, then `.mari/config.json` ("attn":{"model":…}), then
+// auto-discovery of a small multilingual *.gguf in common locations — so attention runs out of
+// the box without anyone configuring it. Cached (the sweep would otherwise rescan per doc).
+let _attnModelCache;
+function discoverGguf() {
+  const home = process.env.HOME || '';
+  const dirs = [
+    join(home, '.mari', 'models'), join(home, '.cache', 'mari', 'models'),
+    join(dirname(_f2u(import.meta.url)), '..', '..', 'native', 'attn', 'models'),
+    join(home, 'attn', 'cpp', 'models'),
+  ];
+  const found = [];
+  const scan = (d, depth) => {
+    if (depth > 3) return;
+    let ents; try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) scan(p, depth + 1);
+      else if (/\.gguf$/i.test(e.name) && !/mmproj|projector/i.test(e.name)) { try { found.push([p, statSync(p).size]); } catch { /* skip */ } }
+    }
+  };
+  for (const d of dirs) scan(d, 0);
+  if (!found.length) return null;
+  // Prefer the 0.8B Qwen we've standardized on; then any 0.8B, then a small non-VL Qwen.
+  const pref = [/qwen3\.5-0\.8b/i, /0\.8b/i, /qwen3\.5/i];
+  for (const re of pref) { const f = found.find(([p]) => re.test(p)); if (f) return f[0]; }
+  found.sort((a, b) => a[1] - b[1]);
+  return (found.find(([p]) => /qwen/i.test(p) && !/-vl-/i.test(p)) || found[0])[0];
+}
 function attnModel() {
-  if (process.env.MARI_ATTN_MODEL) return process.env.MARI_ATTN_MODEL;
-  try { const c = loadConfig(process.cwd()); return c.raw?.attn?.model || c.raw?.i18n?.attn?.model || null; } catch { return null; }
+  if (_attnModelCache !== undefined) return _attnModelCache;
+  let m = process.env.MARI_ATTN_MODEL;
+  if (!m) { try { const c = loadConfig(process.cwd()); m = c.raw?.attn?.model || c.raw?.i18n?.attn?.model; } catch { /* no config */ } }
+  if (!m) m = discoverGguf();
+  _attnModelCache = (m && existsSync(m)) ? m : null;
+  return _attnModelCache;
 }
 function runMariAttn(ctxFile, qryFile, { grounding = false, threshold = 0.3, querySegment = 'paragraph' } = {}) {
   const bin = mariAttnBin();
@@ -557,7 +588,9 @@ function attnDecision() {
     console.error(`--attention: cannot run — ${why}.`);
     process.exit(2);
   }
-  return !flag('no-attention') && (flag('attention') || attnReady());
+  const on = !flag('no-attention') && (flag('attention') || attnReady());
+  if (on) console.error(`(attention ON — model: ${attnModel().split('/').pop()}; ~3s/doc, this is the slow part)`);
+  return on;
 }
 // Run coverage for one source→translation pair and print the dropped passages, indented under
 // the current doc (used by `i18n conform --attention` to localize the prose behind a drift).
