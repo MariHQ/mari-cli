@@ -353,12 +353,15 @@ const noDirectional = mapRule('no-directional', FAM.C, 'advisory', L.DIRECTIONAL
 
 // ======================= Family A: markdown structure tells =======================
 
-// A whole line that is just a bold phrase, used as a fake section header instead of `##`.
-// Distinct from bold-lead-in-list (which is a run of `- **Header**: text` items).
+// A whole line that is just a short, title-like bold phrase used as a fake section header
+// instead of `##`. To stay clear of legitimate conventions, it must NOT end in punctuation —
+// a trailing colon means a label introducing inline content ("**Fields:**") and a period means
+// emphasis ("**Never give up.**"), neither of which is a heading. Distinct from bold-lead-in-list
+// (a run of `- **Header**: text` items).
 const emphasisAsHeading = {
   id: 'emphasis-as-heading', family: FAM.A, defaultSeverity: 'advisory',
   run(ctx, emit) {
-    scan(ctx, /^[ \t]*(\*\*|__)[^*_\n]{2,60}\1:?[ \t]*$/gm, (m, i) => {
+    scan(ctx, /^[ \t]*(\*\*|__)([^*_\n]{1,48}?[^*_\n\s.:!?,;])\1[ \t]*$/gm, (m, i) => {
       if (ctx.isTableLine(i)) return;
       emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `Bold line used as a heading — use a real heading ("## …") instead.`);
     });
