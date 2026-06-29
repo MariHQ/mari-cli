@@ -403,6 +403,7 @@ const skippedHeading = {
 // ---- registry --------------------------------------------------------------
 
 import { EXTRA_RULES } from './rules-extra.mjs';
+import { VALE_RULES } from './rules-vale.mjs';
 
 export const RULES = [
   overusedWord, marketingBuzzword, clicheOpener, fillerPhrase, manufacturedContrast,
@@ -414,6 +415,7 @@ export const RULES = [
   sentenceCaseHeading, headingEndPunctuation, wordSwap,
   gendered, ableist, vagueLinkText, skippedHeading,
   ...EXTRA_RULES,
+  ...VALE_RULES,
 ];
 
 export const FAMILIES = FAM;

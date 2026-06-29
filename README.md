@@ -1,6 +1,6 @@
 # Mari
 
-Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 103 deterministic detector rules for AI-generated prose.
+Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 171 deterministic detector rules for AI-generated prose.
 
 > **Quick start:** From your project root, run `npx mari install`, then run `/mari init` inside your AI coding or writing tool. Full docs: [mari.style](https://mari.style).
 
@@ -183,16 +183,16 @@ npx mari live draft.md --n=3            # iterate one sentence: a tighter varian
 
 `detect` reads **markdown** (`.md`, `.markdown`, `.mdx`, `.mdc`); directory scans skip everything else.
 
-The detector catches **103 deterministic issues** across four families:
+The detector catches **171 deterministic issues** across four families:
 
 | Family | Rules | Examples |
 |--------|------:|----------|
 | **AI-slop tells** | 31 | overused vocabulary (*delve / meticulous / underscore*, weighted by measured over-use), hype intensifiers ("greatly", "crucial", "one of the most"), cliché openers, manufactured contrast ("not just X — it's Y"), the "despite challenges… continues to" closer, significance/legacy boilerplate, conclusion-that-restates, vague attribution, em-dash overuse, smart quotes in plaintext, emoji bullets, assistant meta-phrases ("I hope this helps"), bold-lead-in lists, a bold line used as a heading, tricolon density, transition/conversational scaffolding |
-| **Clarity & concision** | 12 | passive voice, long sentences, wordy phrases ("in order to" → "to"), zombie nouns, adverb overuse, reading-grade ceiling, weasel words, undefined jargon |
-| **Style, formatting & citations** | 48 | sentence-case headings, contractions, second person ("Users can" → "you"), "please"/latinism bans (Google), terminology consistency, inconsistent capitalization of a term ("Catalog Store" vs "catalog store"), acronym casing (ddl vs DDL) and plural (UDF's → UDFs), exclamation overuse, number style, em-dash spacing, redundant acronyms, duplicate headings, code fences missing a language hint, placeholder/tracking-param citations — plus per-pack rules: AP omits the serial comma + spells one–nine, Chicago spells zero–one hundred, plain-language sentence-length ceiling (Microsoft / Google / AP / Chicago / plain packs) |
-| **Inclusive & accessible language** | 12 | gendered defaults, ableist terms, person-first language, inclusive tech terms (allowlist/blocklist), non-inclusive idioms, vague link text ("click here"), bare URLs, skipped heading levels, missing alt text |
+| **Clarity & concision** | 13 | passive voice, long sentences, wordy phrases ("in order to" → "to"), zombie nouns, adverb overuse, reading-grade ceiling, weasel words, undefined jargon |
+| **Style, formatting & citations** | 110 | sentence-case headings, contractions, second person ("Users can" → "you"), "please"/latinism bans (Google), terminology consistency, inconsistent capitalization of a term ("Catalog Store" vs "catalog store"), acronym casing (ddl vs DDL) and plural (UDF's → UDFs), exclamation overuse, number/date/time/unit formatting, em-dash spacing, redundant acronyms, duplicate headings, code fences missing a language hint, placeholder/tracking-param citations — plus the full per-pack conformance sets (Microsoft / Google / AP / Chicago / plain) |
+| **Inclusive & accessible language** | 17 | gendered defaults, ableist terms, person-first language, inclusive tech terms (allowlist/blocklist), non-inclusive idioms, vague link text ("click here"), bare URLs, skipped heading levels, missing alt text |
 
-The base style guide selects which conformance rules fire. mari ships rule packs for the **Microsoft Writing Style Guide**, the **Google developer documentation style guide**, **AP**, **Chicago**, and **plainlanguage.gov**, in the spirit of [Vale](https://vale.sh)'s style packages but tuned for AI-generated drafts.
+The base style guide selects which conformance rules fire. Mari ships full rule packs for the **Microsoft Writing Style Guide**, the **Google developer documentation style guide**, **AP**, **Chicago**, and **plainlanguage.gov**. The Microsoft and Google packs are a direct port of [Vale](https://vale.sh)'s official style packages — **96% of their deterministically-checkable rules** (the rest need a part-of-speech tagger or proper-noun detection, which a deterministic linter can't do reliably) — tuned for AI-generated drafts.
 
 By default, `detect` respects the same `.mari/config.json` and `.mari/config.local.json` detector config as the hook: `detector.ignoreRules`, `detector.ignoreFiles`, `detector.ignoreValues`, and `detector.styleGuide`.
 
