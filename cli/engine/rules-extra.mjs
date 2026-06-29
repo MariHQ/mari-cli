@@ -351,6 +351,63 @@ const americanSpelling = mapRule('american-spelling', FAM.C, 'warn', L.BRITISH_S
 const noPreannounce = listRule('no-preannounce', FAM.C, 'advisory', L.PREANNOUNCE, (w) => `Avoid time-relative wording "${w}" — docs outlive it.`, 'google');
 const noDirectional = mapRule('no-directional', FAM.C, 'advisory', L.DIRECTIONAL, 'Avoid directional cross-refs', 'google');
 
+// ======================= Family A: markdown structure tells =======================
+
+// A whole line that is just a bold phrase, used as a fake section header instead of `##`.
+// Distinct from bold-lead-in-list (which is a run of `- **Header**: text` items).
+const emphasisAsHeading = {
+  id: 'emphasis-as-heading', family: FAM.A, defaultSeverity: 'advisory',
+  run(ctx, emit) {
+    scan(ctx, /^[ \t]*(\*\*|__)[^*_\n]{2,60}\1:?[ \t]*$/gm, (m, i) => {
+      if (ctx.isTableLine(i)) return;
+      emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `Bold line used as a heading — use a real heading ("## …") instead.`);
+    });
+  },
+};
+
+// ======================= Family C / D: markdown quality =======================
+
+// A raw URL dropped inline instead of a descriptive markdown link (also an accessibility tell).
+const bareUrl = {
+  id: 'bare-url', family: FAM.D, defaultSeverity: 'advisory',
+  run(ctx, emit) {
+    // URLs inside code are already masked out; skip link targets `](url)`, autolinks `<url>`,
+    // attribute/quote contexts, and reference definitions `[id]: url`.
+    scan(ctx, /(?<![("'<=\]])\bhttps?:\/\/[^\s)>\]"']+/g, (m, i) => {
+      const ls = ctx.masked.lastIndexOf('\n', i - 1) + 1;
+      if (/\]:\s*$/.test(ctx.masked.slice(ls, i))) return; // reference definition
+      emitAt(ctx, emit, this.id, this.family, 'advisory', i, Math.min(m[0].length, 50), `Bare URL — use descriptive link text ("[text](${m[0].slice(0, 30)}…)").`);
+    });
+  },
+};
+
+// A fenced code block with no language hint (both Microsoft & Google guides recommend one).
+const fencedCodeLanguage = {
+  id: 'fenced-code-language', family: FAM.C, defaultSeverity: 'advisory',
+  run(ctx, emit) {
+    const re = /^([ \t]*)```([^\n`]*)$/gm; // fence lines (open and close alternate)
+    let m, k = 0;
+    while ((m = re.exec(ctx.text))) {
+      const isOpener = (k % 2) === 0; k++;
+      if (isOpener && !m[2].trim()) emitAt(ctx, emit, this.id, FAM.C, 'advisory', m.index + m[1].length, 3, `Fenced code block has no language hint — add one (e.g. \`\`\`bash).`);
+    }
+  },
+};
+
+// The same heading text used more than once (ambiguous anchors; an AI repetition tell).
+const duplicateHeading = {
+  id: 'duplicate-heading', family: FAM.C, defaultSeverity: 'advisory',
+  run(ctx, emit) {
+    const seen = new Set();
+    for (const h of ctx.headings) {
+      const key = h.text.trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) emit({ ruleId: this.id, family: FAM.C, severity: 'advisory', offset: h.start, length: h.raw.length, span: h.text, message: `Duplicate heading "${h.text.trim()}" — make headings unique.` });
+      else seen.add(key);
+    }
+  },
+};
+
 // ======================= Family C: AP pack =======================
 
 // AP omits the Oxford/serial comma; flag its presence so prose drops it (the shared
@@ -519,7 +576,9 @@ export const EXTRA_RULES = [
   // Family A
   negativeParallelism, tricolonOveruse, servesAsCopula, mediaCoverage, futureOutlook,
   conversational, superficialIng, transitionScaffolding, interrogativeAnswer, excessiveBold, listicleReflex,
-  uniformCadence,
+  uniformCadence, emphasisAsHeading,
+  // markdown quality (Family C/D)
+  bareUrl, fencedCodeLanguage, duplicateHeading,
   // Family B
   adverbOveruse, undefinedAcronym, readingGrade,
   // Family C shared

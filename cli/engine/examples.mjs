@@ -43,6 +43,10 @@ export const FIX_EXAMPLES = {
   'ap-number-style': { bad: 'The release closed 9 issues.', good: 'The release closed nine issues.', note: 'AP spells out zero through nine.' },
   'chicago-number-style': { bad: 'The group has 42 members.', good: 'The group has forty-two members.', note: 'Chicago spells out zero through one hundred.' },
   'plain-long-sentence': { bad: '(a 22-word sentence)', good: 'Split it so each sentence stays under 20 words.' },
+  'emphasis-as-heading': { bad: '**Configuration**\n\nSet the value.', good: '## Configuration\n\nSet the value.', note: 'A bold line as a header → a real heading.' },
+  'bare-url': { bad: 'See https://example.com for details.', good: 'See [the docs](https://example.com) for details.' },
+  'fenced-code-language': { bad: '```\nnpm install\n```', good: '```bash\nnpm install\n```', note: 'Add a language hint to the fence.' },
+  'duplicate-heading': { bad: '# Setup … # Setup', good: '# Setup … # Teardown', note: 'Make repeated headings unique.' },
 };
 
 export function fixExampleFor(ruleId) { return FIX_EXAMPLES[ruleId] || null; }

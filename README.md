@@ -1,6 +1,6 @@
 # Mari
 
-Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 95 deterministic detector rules for AI-generated prose.
+Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 99 deterministic detector rules for AI-generated prose.
 
 > **Quick start:** From your project root, run `npx mari install`, then run `/mari init` inside your AI coding or writing tool. Full docs: [mari.style](https://mari.style).
 
@@ -181,14 +181,14 @@ npx mari live draft.md --n=3            # iterate one sentence: a tighter varian
 
 `detect` reads **markdown** (`.md`, `.markdown`, `.mdx`, `.mdc`); directory scans skip everything else.
 
-The detector catches **95 deterministic issues** across four families:
+The detector catches **99 deterministic issues** across four families:
 
 | Family | Rules | Examples |
 |--------|------:|----------|
-| **AI-slop tells** | 29 | overused vocabulary (*delve / meticulous / underscore*, weighted by measured over-use), cliché openers, manufactured contrast ("not just X — it's Y"), the "despite challenges… continues to" closer, significance/legacy boilerplate, conclusion-that-restates, vague attribution, em-dash overuse, smart quotes in plaintext, emoji bullets, assistant meta-phrases ("I hope this helps"), bold-lead-in lists, tricolon density, transition/conversational scaffolding |
+| **AI-slop tells** | 30 | overused vocabulary (*delve / meticulous / underscore*, weighted by measured over-use), cliché openers, manufactured contrast ("not just X — it's Y"), the "despite challenges… continues to" closer, significance/legacy boilerplate, conclusion-that-restates, vague attribution, em-dash overuse, smart quotes in plaintext, emoji bullets, assistant meta-phrases ("I hope this helps"), bold-lead-in lists, a bold line used as a heading, tricolon density, transition/conversational scaffolding |
 | **Clarity & concision** | 12 | passive voice, long sentences, wordy phrases ("in order to" → "to"), zombie nouns, adverb overuse, reading-grade ceiling, weasel words, undefined jargon |
-| **Style, formatting & citations** | 43 | sentence-case headings, contractions, second person, "please"/latinism bans (Google), terminology consistency, exclamation overuse, number style, em-dash spacing, redundant acronyms, placeholder/tracking-param citations — plus per-pack rules: AP omits the serial comma + spells one–nine, Chicago spells zero–one hundred, plain-language sentence-length ceiling (Microsoft / Google / AP / Chicago / plain packs) |
-| **Inclusive & accessible language** | 11 | gendered defaults, ableist terms, person-first language, inclusive tech terms (allowlist/blocklist), non-inclusive idioms, vague link text ("click here"), skipped heading levels, missing alt text |
+| **Style, formatting & citations** | 45 | sentence-case headings, contractions, second person, "please"/latinism bans (Google), terminology consistency, exclamation overuse, number style, em-dash spacing, redundant acronyms, duplicate headings, code fences missing a language hint, placeholder/tracking-param citations — plus per-pack rules: AP omits the serial comma + spells one–nine, Chicago spells zero–one hundred, plain-language sentence-length ceiling (Microsoft / Google / AP / Chicago / plain packs) |
+| **Inclusive & accessible language** | 12 | gendered defaults, ableist terms, person-first language, inclusive tech terms (allowlist/blocklist), non-inclusive idioms, vague link text ("click here"), bare URLs, skipped heading levels, missing alt text |
 
 The base style guide selects which conformance rules fire. mari ships rule packs for the **Microsoft Writing Style Guide**, the **Google developer documentation style guide**, **AP**, **Chicago**, and **plainlanguage.gov**, in the spirit of [Vale](https://vale.sh)'s style packages but tuned for AI-generated drafts.
 

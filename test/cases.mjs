@@ -242,6 +242,20 @@ export const CASES = [
     bad: 'See the configuration section above.',
     good: 'See the configuration section in Setup.' },
 
+  // ===== Markdown structure / quality =====
+  { rule: 'emphasis-as-heading',
+    bad: '**Configuration**\n\nSet the timeout value.',
+    good: '## Configuration\n\nSet the timeout value.' },
+  { rule: 'bare-url',
+    bad: 'See https://example.com/guide for the full guide.',
+    good: 'See [the full guide](https://example.com/guide) for details.' },
+  { rule: 'fenced-code-language',
+    bad: '```\nnpm install\n```',
+    good: '```bash\nnpm install\n```' },
+  { rule: 'duplicate-heading',
+    bad: '# Setup\n\nFirst steps.\n\n# Setup\n\nMore steps.',
+    good: '# Setup\n\nFirst steps.\n\n# Teardown\n\nCleanup steps.' },
+
   // ===== Family C: AP / Chicago / plain packs =====
   { rule: 'ap-serial-comma', pack: 'ap',
     bad: 'We shipped docs, tests, and code.',
