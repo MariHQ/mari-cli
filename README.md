@@ -310,9 +310,20 @@ merges/splits/reorders), attention **coverage** asks the robust question "did th
 engage this source content at all?" — so reordering doesn't trip it. It's opt-in: build the
 binary once (needs a local llama.cpp), then point `MARI_ATTN_MODEL` at a GGUF.
 
+The bundle ships prebuilt — users never compile; only the GGUF model is supplied at runtime.
+
+**One primitive, several uses.** Coverage is the i18n wiring of a general attention check —
+"how much does query text engage context text?" The same binary is exposed directly:
+
 ```bash
-cmake -S native/attn -B native/attn/build && cmake --build native/attn/build --target mari_attn
+mari attention <context> <query>              # coverage: context spans the query ignored (docs↔code drift)
+mari attention <context> <query> --grounding  # grounding: query rows that ignore the context
+mari factcheck draft.md --source facts.md --attention   # flag sentences disconnected from the facts
 ```
+
+`--attention` grounding flags content **disconnected** from the facts (fabricated or off-topic —
+e.g. a sentence about the Eiffel Tower against software facts drops to ~20% attention). It
+complements NLI factchecking, which catches *on-topic contradictions* attention can't.
 
 Built-in layouts (any subset via `i18n.layouts`):
 

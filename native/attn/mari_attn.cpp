@@ -6,16 +6,18 @@
 // coverage are content the translation likely avoided / never carried over. Output is Mari
 // findings JSON on stdout — no heatmap, nothing to reparse.
 //
-// Usage (driven by `mari i18n coverage`):
-//   mari_attn --model <gguf> --context <source.md> --query-tree <dir-with-translation> [--mari-threshold 0.3]
+// The Mari CLI selects the aggregation direction with a flag:
+//   --mari-coverage   flag CONTEXT spans the query barely attends to (i18n: dropped content)
+//   --mari-grounding  flag QUERY rows that barely attend to the context (factcheck: ungrounded)
+// Either way the output is Mari findings JSON on stdout — no heatmap, nothing to reparse.
+//
+// Usage:
+//   mari_attn --model <gguf> --context <ctx> --query <qry> (--mari-coverage|--mari-grounding) [--mari-threshold 0.3]
 
 #define main attn_extract_entry
 #include "main.cpp"
 #undef main
 
 int main(int argc, char ** argv) {
-    std::vector<char *> av(argv, argv + argc);
-    static char force_coverage[] = "--mari-coverage";
-    av.push_back(force_coverage);
-    return attn_extract_entry((int) av.size(), av.data());
+    return attn_extract_entry(argc, argv);
 }

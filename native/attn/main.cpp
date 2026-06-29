@@ -1543,8 +1543,9 @@ struct Args {
     double layer_fraction_end = 0.88;
     bool sink_normalization = true;
     bool per_file = false;          // iterate context files individually (tiny windows)
-    bool mari_coverage = false;     // Mari mode: emit low-coverage SOURCE spans as findings, not a heatmap
-    double mari_threshold = 0.3;    // flag a source span below this fraction of peak coverage
+    bool mari_coverage = false;     // Mari mode: flag SOURCE spans the query barely attends to (i18n: dropped content)
+    bool mari_grounding = false;    // Mari mode: flag QUERY rows that barely attend to the context (factcheck: ungrounded)
+    double mari_threshold = 0.3;    // flag below this fraction of the peak score
     bool input_prompt_set = false;
     bool mmproj_use_gpu = true;
     bool check_context = false;     // image mode: plan/tokenize and exit before decode
@@ -1617,6 +1618,7 @@ static Args parse_args(int argc, char ** argv) {
         }
         else if (k == "--per-file") a.per_file = true;
         else if (k == "--mari-coverage") { a.mari_coverage = true; a.per_file = true; }
+        else if (k == "--mari-grounding") { a.mari_grounding = true; a.per_file = true; }
         else if (k == "--mari-threshold") a.mari_threshold = std::atof(need(k.c_str()).c_str());
         else if (k == "--image") a.image_path = need("--image");
         else if (k == "--svg" || k == "--image-svg") a.svg_path = need(k.c_str());
@@ -2970,7 +2972,7 @@ static int run_per_file_scan(const Args & args) {
     size_t dumped_inputs = 0;
 
     auto write_json_now = [&]() {
-        if (args.mari_coverage) return;  // Mari mode emits findings once at the end, not a heatmap
+        if (args.mari_coverage || args.mari_grounding) return;  // Mari emits findings at the end, not a heatmap
         JsonOut j;
         j.s << "{";
         j.s << "\"context_text\":"; j.escape(global_ctx_text);
@@ -3053,6 +3055,36 @@ static int run_per_file_scan(const Args & args) {
             } else if (in_run) { close_run((int) c - 1); in_run = false; }
         }
         if (in_run) close_run((int) C - 1);
+        j.s << "]}";
+        std::printf("%s\n", j.s.str().c_str());
+    };
+
+    // Mari grounding: total attention each QUERY row pays to the context (sum over context
+    // columns). A query row with low total barely engages the context — for factcheck, a doc
+    // sentence that doesn't attend to any fact is ungrounded. Emit flagged query rows.
+    auto write_mari_grounding = [&]() {
+        const size_t Q = global_scores.size();
+        std::vector<double> tot(Q, 0.0);
+        for (size_t q = 0; q < Q; q++) for (float v : global_scores[q]) tot[q] += v;
+        double peak = 1e-9;
+        for (double v : tot) peak = std::max(peak, v);
+
+        JsonOut j;
+        j.s << "{\"mari_grounding\":true,\"query_rows\":" << Q
+            << ",\"threshold\":" << args.mari_threshold << ",\"flagged\":[";
+        bool first = true;
+        for (size_t q = 0; q < Q && q < query_set.chunks.size(); q++) {
+            double n = tot[q] / peak;
+            if (n >= args.mari_threshold) continue;
+            const Chunk & ch = query_set.chunks[q];
+            if (ch.text.size() < 8) continue;
+            if (!first) j.s << ",";
+            first = false;
+            j.s << "{\"score\":" << n << ",\"offset\":" << ch.start
+                << ",\"label\":"; j.escape(ch.label);
+            j.s << ",\"text\":"; j.escape(ch.text.substr(0, 240));
+            j.s << "}";
+        }
         j.s << "]}";
         std::printf("%s\n", j.s.str().c_str());
     };
@@ -3506,10 +3538,11 @@ static int run_per_file_scan(const Args & args) {
     }
     write_json_now();
     if (args.mari_coverage) write_mari_coverage();
+    if (args.mari_grounding) write_mari_grounding();
 
     log_line("scan complete: %d/%zu files in %.1fs",
         written_files, ctx_paths.size(), (ggml_time_us() - t_scan_start) / 1e6);
-    if (!args.mari_coverage) log_line("wrote %s", args.out_path.c_str());
+    if (!args.mari_coverage && !args.mari_grounding) log_line("wrote %s", args.out_path.c_str());
 
     llama_free(ctx);
     llama_model_free(model);

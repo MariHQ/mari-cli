@@ -28,12 +28,27 @@ const argv = process.argv.slice(2);
 const cmd = argv[0];
 const rest = argv.slice(1);
 
+// Value-taking options accept both `--opt=value` and `--opt value`. Listed so positionals()
+// can skip a space-form value and not mistake it for a positional argument.
+const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model']);
 function flag(name) { return rest.includes(`--${name}`); }
 function opt(name, def = null) {
-  const hit = rest.find((a) => a.startsWith(`--${name}=`));
-  return hit ? hit.split('=').slice(1).join('=') : def;
+  const eq = rest.find((a) => a.startsWith(`--${name}=`));
+  if (eq) return eq.split('=').slice(1).join('=');
+  const i = rest.indexOf(`--${name}`);
+  if (i >= 0 && rest[i + 1] && !rest[i + 1].startsWith('--')) return rest[i + 1];
+  return def;
 }
-function positionals() { return rest.filter((a) => !a.startsWith('--')); }
+function positionals() {
+  const out = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i].startsWith('--')) continue;
+    const prev = rest[i - 1];
+    if (prev && prev.startsWith('--') && VALUE_OPTS.has(prev.slice(2))) continue; // value of a space-form option
+    out.push(rest[i]);
+  }
+  return out;
+}
 
 async function main() {
   switch (cmd) {
@@ -48,6 +63,7 @@ async function main() {
     case 'facts': return facts();
     case 'asset': return asset();
     case 'i18n': return i18n();
+    case 'attention': return attentionCmd();
     case 'live': return live();
     case undefined:
     case '--help':
@@ -312,8 +328,22 @@ function hooks() {
 async function runFactcheck() {
   const root = process.cwd();
   const target = positionals()[0];
-  if (!target || !existsSync(target)) { console.error('Usage: mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--ground=attention]'); process.exit(2); }
+  if (!target || !existsSync(target)) { console.error('Usage: mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--attention]'); process.exit(2); }
   const sourcePath = opt('source');
+
+  // --attention: native attention grounding. Facts (FACTS.md or --source) are the context, the
+  // doc is the query; sentences that don't attend to any fact are flagged ungrounded.
+  if (flag('attention')) {
+    const factsPath = sourcePath || join(root, 'FACTS.md');
+    if (!existsSync(factsPath)) { console.error('No FACTS.md / --source for --attention grounding.'); process.exit(2); }
+    const res = runMariAttn(factsPath, target, { grounding: true, threshold: parseFloat(opt('threshold') || '0.3'), querySegment: 'sentence' });
+    if (res.error) { console.error(res.error); process.exit(2); }
+    const flagged = res.out.flagged || [];
+    console.log(`Grounding ${target} against ${shortenPath(factsPath)} (attention):`);
+    printAttnFindings(flagged, readFileSync(target, 'utf8'), 'every sentence attends to the facts');
+    process.exit(flag('strict') && flagged.length ? 1 : 0);
+  }
+
   let facts, sourceMode = false;
   if (sourcePath) {
     if (!existsSync(sourcePath)) { console.error(`No such source: ${sourcePath}`); process.exit(2); }
@@ -464,27 +494,70 @@ function asset() {
 // across the common localization layouts. Powers the hook's "translations may be stale" note.
 const shortenPath = (p) => String(p).replace(process.env.HOME || '~~', '~');
 
-// Semantic coverage via the native attention extractor (native/attn/build/mari_attn): puts the
-// SOURCE as context and the TRANSLATION as query, and flags source spans the translation drew
-// little attention to (content likely not carried over). Opt-in — needs the built binary + a
-// multilingual GGUF model.
+// ─── Native attention primitive ─────────────────────────────────────────────────────────────
+// One mechanism — "how much does query text engage context text?" — drives every attention
+// feature. `coverage` flags CONTEXT spans the query ignored (i18n: dropped translation content;
+// docs↔code: stale docs). `grounding` flags QUERY rows that ignore the context (factcheck:
+// ungrounded sentences). Runs the shipped, relocatable native binary; opt-in via MARI_ATTN_MODEL.
+function mariAttnBin() {
+  const attn = join(dirname(_f2u(import.meta.url)), '..', '..', 'native', 'attn');
+  const shipped = join(attn, 'dist', `${process.platform}-${process.arch}`, 'mari_attn'); // prebuilt
+  const built = join(attn, 'build', 'mari_attn');
+  return process.env.MARI_ATTN_BIN || (existsSync(shipped) ? shipped : built);
+}
+function runMariAttn(ctxFile, qryFile, { grounding = false, threshold = 0.3, querySegment = 'paragraph' } = {}) {
+  const bin = mariAttnBin();
+  const model = process.env.MARI_ATTN_MODEL;
+  if (!existsSync(bin)) return { error: `attention binary not shipped for ${process.platform}-${process.arch}; set MARI_ATTN_BIN or build native/attn (see native/attn/README.md).` };
+  if (!model || !existsSync(model)) return { error: 'set MARI_ATTN_MODEL to a multilingual GGUF model (e.g. a Qwen *.gguf).' };
+  const r = spawnSync(bin, ['--model', model, '--context', ctxFile, '--query', qryFile,
+    '--query-glob', extname(qryFile).slice(1) || 'md', grounding ? '--mari-grounding' : '--mari-coverage',
+    '--context-segment', 'phrase', '--phrase-tokens', '10', '--query-segment', querySegment,
+    '--ctx-size', '4096', '--mari-threshold', String(threshold)], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) return { error: `extractor failed: ${(r.stderr || '').trim().split('\n').pop()}` };
+  try { return { out: JSON.parse((r.stdout || '').trim().split('\n').filter(Boolean).pop()) }; }
+  catch { return { error: 'could not parse extractor output' }; }
+}
+// Map a flagged span (which carries a synthetic `// === path ===` header) back to a line in the
+// file the span came from (context for coverage, query for grounding).
+function lineOfSpan(fileText, spanText) {
+  const probe = spanText.replace(/^[/].*?===\s*/s, '').replace(/\s+/g, ' ').trim().slice(0, 30);
+  const word = (probe.split(' ')[0] || '');
+  if (!word || fileText.replace(/\s+/g, ' ').indexOf(probe) < 0) return null;
+  const idx = fileText.indexOf(word);
+  return idx >= 0 ? fileText.slice(0, idx).split('\n').length : null;
+}
+function printAttnFindings(flagged, fileText, label) {
+  if (!flagged.length) { console.log(`    ✓ ${label}`); return; }
+  for (const f of flagged) {
+    const line = lineOfSpan(fileText, f.text);
+    console.log(`    ⚠ ${(f.score * 100).toFixed(0)}%${line ? `  (≈L${line})` : ''}  ${f.text.replace(/\s+/g, ' ').trim().slice(0, 80)}`);
+  }
+}
+
+// `mari attention <context-file> <query-file> [--grounding]` — the raw primitive, for docs↔code
+// drift, summary fidelity, or any "does this text engage that text" check.
+function attentionCmd() {
+  const ctxF = positionals()[0], qryF = positionals()[1];
+  if (!ctxF || !existsSync(ctxF) || !qryF || !existsSync(qryF)) { console.error('Usage: mari attention <context-file> <query-file> [--grounding] [--threshold 0.3]'); process.exit(2); }
+  const root = process.cwd();
+  const grounding = flag('grounding');
+  const ctxAbs = ctxF.startsWith('/') ? ctxF : join(root, ctxF);
+  const qryAbs = qryF.startsWith('/') ? qryF : join(root, qryF);
+  const res = runMariAttn(ctxAbs, qryAbs, { grounding, threshold: parseFloat(opt('threshold') || '0.3'), querySegment: grounding ? 'sentence' : 'paragraph' });
+  if (res.error) { console.error(res.error); process.exit(2); }
+  const flagged = res.out.flagged || [];
+  console.log(`${grounding ? 'Grounding' : 'Coverage'}: ${shortenPath(qryAbs)} ${grounding ? 'vs' : '→'} ${shortenPath(ctxAbs)}`);
+  printAttnFindings(flagged, readFileSync(grounding ? qryAbs : ctxAbs, 'utf8'), grounding ? 'every passage attends to the context' : 'the query covers the context');
+  process.exit(flag('strict') && flagged.length ? 1 : 0);
+}
+
+// `mari i18n coverage` — coverage mode with the SOURCE as context and the TRANSLATION as query.
 function i18nCoverageCmd() {
   const srcF = positionals()[1], transArg = positionals()[2];
   if (!srcF || !existsSync(srcF)) { console.error('Usage: mari i18n coverage <source> [translation]'); process.exit(2); }
   const root = process.cwd();
-  const here = dirname(_f2u(import.meta.url));
-  const attn = join(here, '..', '..', 'native', 'attn');
-  const plat = `${process.platform}-${process.arch}`; // e.g. darwin-arm64
-  const shipped = join(attn, 'dist', plat, 'mari_attn'); // prebuilt, relocatable — no compile
-  const built = join(attn, 'build', 'mari_attn');
-  const bin = process.env.MARI_ATTN_BIN || (existsSync(shipped) ? shipped : built);
-  const model = process.env.MARI_ATTN_MODEL;
-  if (!existsSync(bin)) { console.error(`Coverage isn't shipped for your platform (${plat}). Set MARI_ATTN_BIN to a mari_attn binary, or build native/attn (see native/attn/README.md).`); process.exit(2); }
-  if (!model || !existsSync(model)) { console.error('Set MARI_ATTN_MODEL to a multilingual GGUF model (e.g. a Qwen *.gguf).'); process.exit(2); }
-  const thr = opt('threshold') || '0.3';
-
   const srcAbs = srcF.startsWith('/') ? srcF : join(root, srcF);
-  // resolve the translation(s): explicit file, or all detected siblings of the source
   let targets;
   if (transArg) targets = [{ rel: transArg.startsWith('/') ? transArg : join(root, transArg), locale: '' }];
   else {
@@ -493,21 +566,12 @@ function i18nCoverageCmd() {
     if (!targets.length) { console.error(`No translation given and none detected for ${srcF}.`); process.exit(2); }
   }
   const srcText = readFileSync(srcAbs, 'utf8');
+  const thr = parseFloat(opt('threshold') || '0.3');
   for (const t of targets) {
     console.log(`\n${shortenPath(srcAbs)}  →  ${t.locale ? t.locale + '  ' : ''}${shortenPath(t.rel)}`);
-    const r = spawnSync(bin, ['--model', model, '--context', srcAbs, '--query', t.rel,
-      '--query-glob', extname(t.rel).slice(1) || 'md', '--context-segment', 'phrase', '--phrase-tokens', '10',
-      '--query-segment', 'paragraph', '--ctx-size', '4096', '--mari-threshold', String(thr)], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-    if (r.status !== 0) { console.error(`  (extractor failed: ${(r.stderr || '').trim().split('\n').pop()})`); continue; }
-    let out; try { out = JSON.parse((r.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch { console.error('  (could not parse extractor output)'); continue; }
-    const flagged = out.flagged || [];
-    if (!flagged.length) { console.log('    ✓ the translation covers the source (no low-attention spans)'); continue; }
-    for (const f of flagged) {
-      const probe = f.text.replace(/^[/].*?===\s*/s, '').replace(/\s+/g, ' ').trim().slice(0, 40);
-      const idx = probe ? srcText.replace(/\s+/g, ' ').indexOf(probe) : -1;
-      const line = idx >= 0 ? srcText.slice(0, srcText.indexOf(probe.split(' ')[0])).split('\n').length : null;
-      console.log(`    ⚠ ${(f.score * 100).toFixed(0)}% coverage${line ? `  (≈L${line})` : ''}  ${f.text.replace(/\s+/g, ' ').trim().slice(0, 80)}`);
-    }
+    const res = runMariAttn(srcAbs, t.rel, { grounding: false, threshold: thr });
+    if (res.error) { console.error(`  (${res.error})`); continue; }
+    printAttnFindings(res.out.flagged || [], srcText, 'the translation covers the source');
   }
 }
 
@@ -635,6 +699,7 @@ Usage:
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
   mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)
+  mari attention <context> <query> [--grounding]   Attention coverage/grounding between two docs (docs↔code, summary fidelity, …)
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut
