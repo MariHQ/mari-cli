@@ -242,6 +242,23 @@ export const CASES = [
     bad: 'See the configuration section above.',
     good: 'See the configuration section in Setup.' },
 
+  // ===== Hype + terminology casing =====
+  { rule: 'hype-intensifier',
+    bad: 'This greatly simplifies the workflow.',
+    good: 'This removes two manual steps from the workflow.' },
+  { rule: 'acronym-case',
+    bad: 'Run the DDL, then edit the ddl file by hand.',
+    good: 'Run the DDL, then edit the DDL file by hand.' },
+  { rule: 'acronym-plural',
+    bad: "Register your UDF's in the catalog.",
+    good: 'Register your UDFs in the catalog.' },
+  { rule: 'inconsistent-capitalization',
+    bad: 'The Catalog Store holds the entries; update the catalog store after a change.',
+    good: 'The catalog store holds the entries; update the catalog store after a change.' },
+  { rule: 'second-person',
+    bad: 'Users can configure the endpoint.',
+    good: 'You can configure the endpoint.' },
+
   // ===== Markdown structure / quality =====
   { rule: 'emphasis-as-heading',
     bad: '**Configuration**\n\nSet the timeout value.',

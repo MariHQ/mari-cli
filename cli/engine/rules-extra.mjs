@@ -213,8 +213,9 @@ const useContractions = {
 const secondPerson = {
   id: 'second-person', family: FAM.C, defaultSeverity: 'advisory',
   run(ctx, emit) {
-    scan(ctx, /\bthe user (should|can|must|may|needs to|will|might)\b/gi, (m, i) =>
-      emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `Prefer second person: "the user ${m[1]}" → "you ${m[1] === 'needs to' ? 'need to' : m[1]}".`));
+    // "the user can …" and bare "users can / users have access …" — both want second person.
+    scan(ctx, /\b(the user|users)\s+(should|can|must|may|need to|needs to|will|might|have|has|access|get)\b/gi, (m, i) =>
+      emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `Prefer second person: "${m[0]}" → "you …".`));
   },
 };
 
@@ -411,6 +412,73 @@ const duplicateHeading = {
   },
 };
 
+// ======================= Family A: hype =======================
+
+// Vague magnifiers the docs register bans ("greatly simplifies", "crucial", "one of the most").
+const hypeIntensifier = listRule('hype-intensifier', FAM.A, 'advisory', L.HYPE_INTENSIFIERS,
+  (w) => `Hype intensifier "${w}" — state the concrete benefit instead.`);
+
+// ======================= Family C: terminology casing consistency =======================
+
+// Words that live in ACRONYM_ALLOW only so `undefined-acronym` ignores them — they're English
+// words / SQL keywords / callout labels, NOT acronyms, so casing-consistency must skip them.
+const ACRO_CASE_STOP = new Set(('note tip info warning important caution danger attention hint example see ' +
+  'warn error debug trace idea and or not null true false get put post head new all desc asc ok').split(' '));
+// A known tech acronym written lowercase when the doc also uses the uppercase form (ddl vs DDL).
+const acronymCase = {
+  id: 'acronym-case', family: FAM.C, defaultSeverity: 'advisory',
+  run(ctx, emit) {
+    const text = ctx.masked;
+    const present = new Set(); // known acronyms that appear UPPERCASE in this doc
+    let m; const ure = /\b[A-Z]{2,6}\b/g;
+    while ((m = ure.exec(text))) if (ACRONYM_ALLOW.has(m[0]) && !ACRO_CASE_STOP.has(m[0].toLowerCase())) present.add(m[0].toLowerCase());
+    if (!present.size) return;
+    const seen = new Set(); let lm; const lre = /\b[a-z]{2,6}\b/g;
+    while ((lm = lre.exec(text))) {
+      const k = lm[0]; if (!present.has(k) || seen.has(k)) continue;
+      seen.add(k);
+      emitAt(ctx, emit, this.id, this.family, 'advisory', lm.index, k.length, `Acronym "${k}" appears as "${k.toUpperCase()}" elsewhere — use one casing.`);
+    }
+  },
+};
+
+// `UDF's` used as a plural — should be `UDFs` (apostrophe only for the possessive).
+const acronymPlural = {
+  id: 'acronym-plural', family: FAM.C, defaultSeverity: 'advisory',
+  run(ctx, emit) {
+    scan(ctx, /\b([A-Z]{2,5})'s\b/g, (m, i) =>
+      emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `"${m[0]}" — use "${m[1]}s" for the plural; keep "'s" only for the possessive.`));
+  },
+};
+
+// A multi-word Title-Case term used capitalized in one place and lowercase in another
+// ("Catalog Store" vs "catalog store"). Multi-word only — single capitalized words (Table, Group)
+// usually carry a real proper-vs-generic distinction and are too noisy to flag. Skips headings/tables.
+const CAP_STOP = new Set(('the a an this that these those it he she they we you i if when while for and but or ' +
+  'not as at by in on to of is are was were be note tip see use run add get set so such each any all').split(' '));
+const inconsistentCapitalization = {
+  id: 'inconsistent-capitalization', family: FAM.C, defaultSeverity: 'advisory',
+  run(ctx, emit) {
+    const text = ctx.masked;
+    const headingLines = new Set(ctx.headings.map((h) => h.line));
+    const seen = new Set();
+    let m; const re = /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b/g; // 2+ consecutive capitalized words
+    while ((m = re.exec(text))) {
+      let words = m[0].split(/\s+/), off = m.index;
+      // drop a leading sentence-initial stopword ("The Catalog Store" → "Catalog Store")
+      while (words.length && CAP_STOP.has(words[0].toLowerCase())) { off += words[0].length + 1; words.shift(); }
+      if (words.length < 2) continue;
+      const phrase = words.join(' '), key = phrase.toLowerCase();
+      if (seen.has(key)) continue;
+      if (ctx.isTableLine(off) || headingLines.has(ctx.locate(off).line)) continue;
+      if (new RegExp('\\b' + esc(key) + '\\b').test(text)) { // same phrase, lowercase, elsewhere?
+        seen.add(key);
+        emitAt(ctx, emit, this.id, this.family, 'advisory', off, phrase.length, `Inconsistent capitalization: "${phrase}" and "${key}" both used — pick one.`);
+      }
+    }
+  },
+};
+
 // ======================= Family C: AP pack =======================
 
 // AP omits the Oxford/serial comma; flag its presence so prose drops it (the shared
@@ -579,9 +647,11 @@ export const EXTRA_RULES = [
   // Family A
   negativeParallelism, tricolonOveruse, servesAsCopula, mediaCoverage, futureOutlook,
   conversational, superficialIng, transitionScaffolding, interrogativeAnswer, excessiveBold, listicleReflex,
-  uniformCadence, emphasisAsHeading,
+  uniformCadence, emphasisAsHeading, hypeIntensifier,
   // markdown quality (Family C/D)
   bareUrl, fencedCodeLanguage, duplicateHeading,
+  // terminology casing consistency (Family C)
+  acronymCase, acronymPlural, inconsistentCapitalization,
   // Family B
   adverbOveruse, undefinedAcronym, readingGrade,
   // Family C shared

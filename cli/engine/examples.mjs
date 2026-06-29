@@ -47,6 +47,10 @@ export const FIX_EXAMPLES = {
   'bare-url': { bad: 'See https://example.com for details.', good: 'See [the docs](https://example.com) for details.' },
   'fenced-code-language': { bad: '```\nnpm install\n```', good: '```bash\nnpm install\n```', note: 'Add a language hint to the fence.' },
   'duplicate-heading': { bad: '# Setup … # Setup', good: '# Setup … # Teardown', note: 'Make repeated headings unique.' },
+  'hype-intensifier': { bad: 'This greatly simplifies a crucial workflow.', good: 'This removes two manual steps from the workflow.', note: 'Replace the magnifier with the concrete benefit.' },
+  'acronym-case': { bad: 'Run the DDL; then edit the ddl file.', good: 'Run the DDL; then edit the DDL file.' },
+  'acronym-plural': { bad: "Register your UDF's here.", good: 'Register your UDFs here.', note: "Apostrophe only for the possessive." },
+  'inconsistent-capitalization': { bad: 'The Catalog Store holds it; update the catalog store.', good: 'The catalog store holds it; update the catalog store.' },
 };
 
 export function fixExampleFor(ruleId) { return FIX_EXAMPLES[ruleId] || null; }

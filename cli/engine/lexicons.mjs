@@ -26,6 +26,13 @@ export const MARKETING_BUZZWORDS = [
   'frictionless', 'bleeding-edge', 'unparalleled', 'unrivaled',
 ];
 
+// Hype intensifiers — vague magnifiers the docs register bans (state the concrete benefit).
+export const HYPE_INTENSIFIERS = [
+  'greatly', 'vastly', 'hugely', 'immensely', 'enormously', 'tremendously', 'remarkably',
+  'crucial', 'crucially', 'pivotal', 'paramount', 'invaluable',
+  'one of the most', 'a great deal of',
+];
+
 export const HEDGES = [
   'it could be argued', 'arguably', 'to some extent', 'in many ways', 'in some ways',
   'more often than not', 'generally speaking', 'broadly speaking', 'in a sense',
