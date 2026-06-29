@@ -19,7 +19,7 @@ import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGen
 import { segment } from '../engine/segment.mjs';
 import * as LEX from '../engine/lexicons.mjs';
 import { detectAssetType, validateAsset, scaffold, ASSET_TYPES } from '../engine/assets.mjs';
-import { i18nAssociations } from '../engine/i18n.mjs';
+import { i18nAssociations, i18nConform } from '../engine/i18n.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -422,9 +422,12 @@ function asset() {
 
 // i18n association: list the translations of a doc (or the source, if a translation is given)
 // across the common localization layouts. Powers the hook's "translations may be stale" note.
+const shortenPath = (p) => String(p).replace(process.env.HOME || '~~', '~');
+
 function i18n() {
+  if (positionals()[0] === 'conform') return i18nConformCmd();
   const target = positionals()[0];
-  if (!target || !existsSync(target)) { console.error('Usage: mari i18n <file>'); process.exit(2); }
+  if (!target || !existsSync(target)) { console.error('Usage: mari i18n <file> | mari i18n conform <file>'); process.exit(2); }
   const root = process.cwd();
   const abs = target.startsWith('/') ? target : join(root, target);
   const config = flag('no-config') ? null : loadConfig(root);
@@ -432,9 +435,37 @@ function i18n() {
   // inside cwd or not. The hook passes the project root for clean relative paths.
   const a = i18nAssociations(abs, '', config);
   if (!a) { console.log(`No localized siblings found for ${target}.`); return; }
-  console.log(`${a.isSource ? 'Source' : `Translation (${a.locale})`} · layout: ${a.layout} · source: ${a.sourceRel}`);
+  console.log(`${a.isSource ? 'Source' : `Translation (${a.locale})`} · layout: ${a.layout} · source: ${shortenPath(a.sourceRel)}`);
   console.log(`${a.siblings.length} localized sibling(s)${a.isSource ? ' that may need updating' : ''}:`);
-  for (const s of a.siblings) console.log(`  ${String(s.locale).padEnd(7)} ${s.rel}`);
+  for (const s of a.siblings) console.log(`  ${String(s.locale).padEnd(7)} ${shortenPath(s.rel)}`);
+}
+
+// Check that every translation shares the source's language-invariant structure (headings,
+// code blocks, links). Mari can't translate — this keeps the docs structurally in lockstep.
+function i18nConformCmd() {
+  const target = positionals()[1];
+  if (!target || !existsSync(target)) { console.error('Usage: mari i18n conform <file>'); process.exit(2); }
+  const root = process.cwd();
+  const abs = target.startsWith('/') ? target : join(root, target);
+  const config = flag('no-config') ? null : loadConfig(root);
+  const a = i18nAssociations(abs, '', config);
+  if (!a) { console.log(`No localized siblings found for ${target}.`); return; }
+  // Always conform from the source: gather every translation in the set.
+  const srcAbs = a.sourceRel;
+  const fromSource = i18nAssociations(srcAbs, '', config);
+  const translations = fromSource ? fromSource.siblings : [];
+  if (!translations.length) { console.log('No translations to conform.'); return; }
+  const srcText = readFileSync(srcAbs, 'utf8');
+  console.log(`Conforming source ${shortenPath(srcAbs)} against ${translations.length} translation(s):`);
+  let warns = 0, clean = 0;
+  for (const t of translations) {
+    const drift = i18nConform(srcText, readFileSync(t.rel, 'utf8'));
+    console.log(`\n  ${String(t.locale).padEnd(7)} ${shortenPath(t.rel)}`);
+    if (!drift.length) { console.log('    ✓ structure matches the source'); clean++; continue; }
+    for (const d of drift) { if (d.severity === 'warn') warns++; console.log(`    ${d.severity === 'warn' ? '⚠' : '·'} ${d.message}`); }
+  }
+  console.log(`\n${clean}/${translations.length} in sync · ${warns} structural drift(s).`);
+  process.exit(flag('strict') && warns > 0 ? 1 : 0);
 }
 
 const PINNABLE = new Set(['audit', 'deslop', 'tighten', 'clarify', 'critique', 'polish', 'document', 'draft', 'outline', 'glossary', 'sharpen', 'soften', 'harden', 'voice', 'cadence', 'format', 'delight', 'adapt', 'localize', 'live', 'factcheck']);
@@ -470,7 +501,7 @@ Usage:
   mari install [--providers=claude,cursor,codex,copilot] [--force]   Wire editor hooks
   mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
-  mari i18n <file>        List a doc's localized siblings (translations to keep in sync)
+  mari i18n <file> | conform <file>   List a doc's translations, or check they share the source's structure
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut

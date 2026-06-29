@@ -3,7 +3,7 @@
 // custom config mirror. Verifies a source maps to its translations, a translation maps back,
 // and ordinary files map to nothing.
 
-import { i18nAssociations } from '../cli/engine/i18n.mjs';
+import { i18nAssociations, i18nConform } from '../cli/engine/i18n.mjs';
 import { i18nNote } from '../skill/scripts/hook-lib.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -52,6 +52,19 @@ check('i18nNote fires for a source edit', !!noteSrc && /may be stale/.test(noteS
 check('i18nNote is silent on a translation by default', (await i18nNote(join(ROOT, 'suffix/README.es.md'), ROOT, {})) === null);
 check('i18nNote fires on a translation when notifyOn=any', /source and other locales/.test(await i18nNote(join(ROOT, 'suffix/README.es.md'), ROOT, { i18n: { notifyOn: 'any' } }) || ''));
 check('i18nNote silent when i18n disabled', (await i18nNote(join(ROOT, 'suffix/README.md'), ROOT, { i18n: { enabled: false } })) === null);
+
+// conform: language-invariant structure must match (headings, code blocks, links)
+const src = '# Title\n## Setup\n```js\nx = 1\n```\n## Usage\nSee [the docs](https://example.com/docs).';
+const transOK = '# Título\n## Configuración\n```js\nx = 1\n```\n## Uso\nVer [los docs](https://example.com/docs).';
+check('conform: matching structure → no drift', i18nConform(src, transOK).length === 0, `(${JSON.stringify(i18nConform(src, transOK))})`);
+const transMissingSection = '# Título\n## Configuración\n```js\nx = 1\n```';
+const d1 = i18nConform(src, transMissingSection);
+check('conform: missing section flagged (warn)', d1.some((x) => x.severity === 'warn' && /headings:/.test(x.message)));
+check('conform: missing code block flagged when counts differ', i18nConform(src, '# T\n## A\n## B').some((x) => /code blocks:/.test(x.message)));
+const transCodeChanged = '# Título\n## Configuración\n```js\nx = 2\n```\n## Uso\nVer https://example.com/docs';
+check('conform: changed code content is advisory', i18nConform(src, transCodeChanged).some((x) => x.severity === 'advisory' && /code block/.test(x.message)));
+const transLinkGone = '# Título\n## Configuración\n```js\nx = 1\n```\n## Uso\nsin enlace';
+check('conform: missing external link is advisory', i18nConform(src, transLinkGone).some((x) => /external link/.test(x.message)));
 
 console.log(`\ni18n: ${pass + fail} checks · ${pass} passed · ${fail} failed`);
 console.log(fail === 0 ? '✓ i18n green\n' : '');

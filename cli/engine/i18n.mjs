@@ -13,6 +13,7 @@
 
 import { readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { segment } from './segment.mjs';
 
 // ISO-639 base codes Mari recognizes as locales (mirrors index.mjs, plus the default `en`).
 const LOCALE_BASE = new Set(('en es fr de pt it ja ko zh ru ar ur hi bn pa te ta mr gu kn ml ' +
@@ -177,6 +178,51 @@ export function i18nAssociations(absPath, root, config) {
     const r = fn(rel, def, root); if (r) return finalize(r, rel);
   }
   return null;
+}
+
+// --- conform: keep every translation structurally identical to the source ----------------
+// Mari can't translate, but a translation must share the source's language-invariant skeleton:
+// the heading hierarchy (a missing section is the #1 drift), the code blocks (code isn't
+// translated), and the link/image targets. Prose differs by language; structure must not.
+
+function fences(text) {
+  const out = [];
+  let m; const re = /(^|\n)(```|~~~)[^\n]*\n([\s\S]*?)\n\2/g;
+  while ((m = re.exec(text))) out.push(m[3].trim());
+  return out;
+}
+
+export function i18nSkeleton(text) {
+  const ctx = segment(text);
+  return {
+    headingLevels: ctx.headings.map((h) => h.level),
+    codeBlocks: fences(text),
+    // external links only — internal doc links are often legitimately localized
+    linkTargets: ctx.links.map((l) => l.target).filter((t) => /^https?:/i.test(t)).sort(),
+    imageTargets: ctx.images.map((i) => i.target).sort(),
+  };
+}
+
+// Compare a source doc to one translation; return drift items (warn = structural, advisory =
+// content that may be intentionally localized).
+export function i18nConform(srcText, transText) {
+  const a = i18nSkeleton(srcText), b = i18nSkeleton(transText);
+  const drift = [];
+  if (a.headingLevels.length !== b.headingLevels.length) {
+    drift.push({ severity: 'warn', message: `headings: ${a.headingLevels.length} in source, ${b.headingLevels.length} here — a section is missing or extra.` });
+  } else if (a.headingLevels.join(',') !== b.headingLevels.join(',')) {
+    drift.push({ severity: 'warn', message: `heading nesting differs from the source (same count, different levels).` });
+  }
+  if (a.codeBlocks.length !== b.codeBlocks.length) {
+    drift.push({ severity: 'warn', message: `code blocks: ${a.codeBlocks.length} in source, ${b.codeBlocks.length} here.` });
+  } else {
+    const changed = a.codeBlocks.filter((c, i) => c !== b.codeBlocks[i]).length;
+    if (changed) drift.push({ severity: 'advisory', message: `${changed} code block(s) differ from the source (code shouldn't be translated).` });
+  }
+  const missing = a.linkTargets.filter((t) => !b.linkTargets.includes(t));
+  if (missing.length) drift.push({ severity: 'advisory', message: `${missing.length} external link(s) in the source are absent here: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''}` });
+  if (a.imageTargets.length !== b.imageTargets.length) drift.push({ severity: 'advisory', message: `images: ${a.imageTargets.length} in source, ${b.imageTargets.length} here.` });
+  return drift;
 }
 
 function finalize(r, rel) {

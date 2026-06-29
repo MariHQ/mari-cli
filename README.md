@@ -264,8 +264,31 @@ editor hook surfaces them after a source edit:
 ```
 
 ```bash
-npx mari i18n README.md   # list a doc's translations (or, from a translation, its source)
+npx mari i18n README.md          # list a doc's translations (or, from a translation, its source)
+npx mari i18n conform README.md  # check every translation shares the source's structure
 ```
+
+### Conform — keep translations structurally in sync
+
+Mari can't translate, but it can hold every translation to the source's **language-invariant
+structure** — the way translations actually drift is a section gets added to the source and
+never to the translations. `mari i18n conform <file>` compares the source against each
+translation and reports:
+
+```text
+Conforming source docs/content/docs/deployment/elastic_scaling.md against 1 translation(s):
+
+  zh      docs/content.zh/docs/deployment/elastic_scaling.md
+    ⚠ headings: 12 in source, 10 here — a section is missing or extra.
+    · 3 code block(s) differ from the source (code shouldn't be translated).
+```
+
+- **Heading count / nesting** mismatch → `warn` (a missing or extra section — the main drift).
+- **Code-block count** mismatch → `warn`; differing code content → advisory (code isn't translated).
+- **External links / images** present in the source but not the translation → advisory.
+
+It checks structure, not prose, so different languages don't trip it. Use `--strict` to exit
+non-zero on structural drift (a CI gate that keeps localized docs from silently falling behind).
 
 Built-in layouts (any subset via `i18n.layouts`):
 
