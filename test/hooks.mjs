@@ -3,6 +3,7 @@
 
 import { proposedEdit, lintContent, targetFile, renderForAgent } from '../skill/scripts/hook-lib.mjs';
 import { addIgnore, setHookEnabled, resetConfig } from '../cli/engine/config-write.mjs';
+import { detectText } from '../cli/engine/index.mjs';
 
 let pass = 0, fail = 0;
 const check = (name, cond) => { if (cond) pass++; else { fail++; console.log('  ✗ ' + name); } };
@@ -49,6 +50,15 @@ check('pre-write: clean content yields no findings', r2.findings.length === 0);
 
 const r3 = await lintContent(sloppy, cwd, '.json');
 check('pre-write: non-prose extension is skipped', r3.findings.length === 0);
+
+// hook severity floor: advisories are dropped by default (error+warn only) so a small edit
+// doesn't surface whole-file advisory backlog. Advisories remain available via `mari audit`.
+const advisoryText = 'Run grep, sed, etc. to filter things.';
+const rawAdv = detectText(advisoryText, { config: { ignoreRules: new Set(), ignoreValues: {}, ignoreFiles: [], styleGuide: 'microsoft' }, useInlineIgnores: true });
+check('floor setup: raw detect surfaces an advisory', rawAdv.some((f) => f.severity === 'advisory'));
+const floored = await lintContent(advisoryText, cwd, '.md');
+check('hook floor: advisories suppressed by default', floored.findings.every((f) => f.severity !== 'advisory'));
+check('hook floor: still keeps error/warn', r1.findings.some((f) => f.severity === 'error'));
 
 // findings come with one-shot bad→good fix exemplars
 const rendered = await renderForAgent('x.md', [

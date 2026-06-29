@@ -17,6 +17,16 @@ export async function readStdin() {
 
 const PROSE = new Set(['.md', '.mdx', '.mdc', '.markdown']);
 
+// The hook surfaces only error + warn by default — on real repos advisories are 70–90% of
+// findings, which buries the actionable ones and pressures whole-file cleanup after a small
+// edit. Advisories stay available on demand via `mari audit`. Override per project with
+// `hook.minSeverity` in .mari/config.json ("error" | "warn" | "advisory").
+const SEV_RANK = { advisory: 0, warn: 1, error: 2 };
+function severityFloor(findings, config) {
+  const floor = SEV_RANK[config?.hook?.minSeverity] ?? SEV_RANK.warn;
+  return findings.filter((f) => (SEV_RANK[f.severity] ?? 0) >= floor);
+}
+
 // Decide the target file from a Claude Code PostToolUse payload. Returns null if nothing to lint.
 export function targetFile(payload) {
   const name = payload?.tool_name;
@@ -35,7 +45,7 @@ export async function lint(fp, cwd) {
   const rel = relative(cwd, fp) || fp;
   if (config && fileIgnored(rel, config.ignoreFiles)) return { findings: [] };
   const text = readFileSync(fp, 'utf8');
-  const findings = detectText(text, { config });
+  const findings = severityFloor(detectText(text, { config }), config);
   return { rel, findings, config };
 }
 
@@ -47,7 +57,7 @@ export async function lintContent(text, cwd, ext = '.md') {
   const { loadConfig } = await import(CONFIG);
   const config = safe(() => loadConfig(cwd), null);
   if (config?.hook?.enabled === false) return { disabled: true, findings: [] };
-  return { findings: detectText(text, { config }), config };
+  return { findings: severityFloor(detectText(text, { config }), config), config };
 }
 
 // Extract the proposed file path + content from a pre-write payload (provider-tolerant).
