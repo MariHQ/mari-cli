@@ -312,18 +312,19 @@ binary once (needs a local llama.cpp), then point `MARI_ATTN_MODEL` at a GGUF.
 
 The bundle ships prebuilt — users never compile; only the GGUF model is supplied at runtime.
 
-**The same engine powers `factcheck`.** "How much does query text engage context text?" run the
-other way — doc as query, facts/source as context — flags sentences **disconnected** from the
-facts:
+**It runs by default, woven into the commands.** Whenever `MARI_ATTN_MODEL` is set, the attention
+layer runs automatically (no flag); without it, the commands stay fast and deterministic.
 
-```bash
-mari factcheck draft.md --source facts.md --attention   # flag sentences with no basis in the facts
-mari factcheck doc.md   --source impl.cpp  --attention   # doc↔code: claims the code doesn't back
-```
+- `mari i18n conform` adds prose-coverage to its structural check — so a doc with matching
+  headings but an *untranslated paragraph* (which structure can't catch) is still flagged. In the
+  sweep it runs only on the drifted docs, to localize which prose is behind.
+- `mari factcheck` appends attention **grounding** — doc as query, facts/`--source` as context —
+  flagging sentences **disconnected** from the facts (fabricated or off-topic; e.g. a sentence
+  about the Eiffel Tower against software facts drops to ~20%). It complements NLI factchecking,
+  which catches *on-topic contradictions* attention can't. `mari factcheck doc.md --source impl.cpp`
+  is the doc↔code check.
 
-`--attention` catches fabricated or off-topic content (e.g. a sentence about the Eiffel Tower
-against software facts drops to ~20% attention). It complements NLI factchecking, which catches
-*on-topic contradictions* attention can't.
+Pass `--no-attention` to skip it.
 
 Built-in layouts (any subset via `i18n.layouts`):
 
