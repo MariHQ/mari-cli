@@ -143,6 +143,8 @@ If you reach for one command often, pin it with `/mari pin deslop` to get `/desl
 
 On Claude Code, GitHub Copilot, Codex, and Cursor, `npx mari install` and `npx mari update` install a provider-native hook manifest along with the skill payload. The hook runs the Mari detector on direct edits to markdown files (`.md`, `.markdown`, `.mdx`, `.mdc`) and surfaces findings back into the agent flow. Claude Code, GitHub Copilot, and Codex surface findings after the edit. Cursor blocks slop-laden proposed writes before they land.
 
+To keep the signal high, the hook surfaces only **error and warn** findings by default — advisories are the bulk of any file and would bury the actionable ones after a small edit. They stay available on demand via `mari audit`. Set `hook.minSeverity` in `.mari/config.json` (`error` | `warn` | `advisory`) to change the floor.
+
 Installed hook surfaces:
 
 - Claude Code: `.claude/settings.local.json` (gitignored, machine-local) runs `${CLAUDE_PROJECT_DIR}/.claude/skills/mari/scripts/hook.mjs`. A hook moved into the shared `settings.json` is honored in place.
