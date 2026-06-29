@@ -290,6 +290,30 @@ Conforming source docs/content/docs/deployment/elastic_scaling.md against 1 tran
 It checks structure, not prose, so different languages don't trip it. Use `--strict` to exit
 non-zero on structural drift (a CI gate that keeps localized docs from silently falling behind).
 
+### Coverage — find passages the translation skipped (attention, opt-in)
+
+`conform` catches structural drift; it can't tell whether a *paragraph* was actually translated
+or quietly dropped. For that, Mari ships a native attention extractor (`native/attn`, a vendored
+copy of the [attention](https://github.com/henneberger/attention) tool with a Mari entry point).
+It runs a multilingual model with the **source as context and the translation as query**, then
+measures how much attention each source span receives. A span the translation barely attends to
+is content it likely avoided:
+
+```bash
+export MARI_ATTN_MODEL=~/models/qwen3.5-0.8b.gguf   # any multilingual GGUF
+mari i18n coverage docs/setup.md docs/setup.zh.md
+#   ⚠ 13% coverage  (≈L5)  All network traffic is encrypted with TLS. Store your API keys…
+```
+
+Unlike sentence-embedding alignment (which assumes 1:1 passages and breaks when a translation
+merges/splits/reorders), attention **coverage** asks the robust question "did the translation
+engage this source content at all?" — so reordering doesn't trip it. It's opt-in: build the
+binary once (needs a local llama.cpp), then point `MARI_ATTN_MODEL` at a GGUF.
+
+```bash
+cmake -S native/attn -B native/attn/build && cmake --build native/attn/build --target mari_attn
+```
+
 Built-in layouts (any subset via `i18n.layouts`):
 
 | Layout | Source ↔ translation | Seen in |

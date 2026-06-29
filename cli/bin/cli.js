@@ -6,6 +6,8 @@
 //   mari hooks status
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath as _f2u } from 'node:url';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../engine/config.mjs';
@@ -462,7 +464,51 @@ function asset() {
 // across the common localization layouts. Powers the hook's "translations may be stale" note.
 const shortenPath = (p) => String(p).replace(process.env.HOME || '~~', '~');
 
+// Semantic coverage via the native attention extractor (native/attn/build/mari_attn): puts the
+// SOURCE as context and the TRANSLATION as query, and flags source spans the translation drew
+// little attention to (content likely not carried over). Opt-in — needs the built binary + a
+// multilingual GGUF model.
+function i18nCoverageCmd() {
+  const srcF = positionals()[1], transArg = positionals()[2];
+  if (!srcF || !existsSync(srcF)) { console.error('Usage: mari i18n coverage <source> [translation]'); process.exit(2); }
+  const root = process.cwd();
+  const here = dirname(_f2u(import.meta.url));
+  const bin = process.env.MARI_ATTN_BIN || join(here, '..', '..', 'native', 'attn', 'build', 'mari_attn');
+  const model = process.env.MARI_ATTN_MODEL;
+  if (!existsSync(bin)) { console.error(`Coverage needs the native extractor. Build it:\n  cmake -S native/attn -B native/attn/build && cmake --build native/attn/build --target mari_attn\nor set MARI_ATTN_BIN.`); process.exit(2); }
+  if (!model || !existsSync(model)) { console.error('Set MARI_ATTN_MODEL to a multilingual GGUF model (e.g. a Qwen *.gguf).'); process.exit(2); }
+  const thr = opt('threshold') || '0.3';
+
+  const srcAbs = srcF.startsWith('/') ? srcF : join(root, srcF);
+  // resolve the translation(s): explicit file, or all detected siblings of the source
+  let targets;
+  if (transArg) targets = [{ rel: transArg.startsWith('/') ? transArg : join(root, transArg), locale: '' }];
+  else {
+    const a = i18nAssociations(srcAbs, '', flag('no-config') ? null : loadConfig(root));
+    targets = a ? a.siblings : [];
+    if (!targets.length) { console.error(`No translation given and none detected for ${srcF}.`); process.exit(2); }
+  }
+  const srcText = readFileSync(srcAbs, 'utf8');
+  for (const t of targets) {
+    console.log(`\n${shortenPath(srcAbs)}  →  ${t.locale ? t.locale + '  ' : ''}${shortenPath(t.rel)}`);
+    const r = spawnSync(bin, ['--model', model, '--context', srcAbs, '--query', t.rel,
+      '--query-glob', extname(t.rel).slice(1) || 'md', '--context-segment', 'phrase', '--phrase-tokens', '10',
+      '--query-segment', 'paragraph', '--ctx-size', '4096', '--mari-threshold', String(thr)], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    if (r.status !== 0) { console.error(`  (extractor failed: ${(r.stderr || '').trim().split('\n').pop()})`); continue; }
+    let out; try { out = JSON.parse((r.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch { console.error('  (could not parse extractor output)'); continue; }
+    const flagged = out.flagged || [];
+    if (!flagged.length) { console.log('    ✓ the translation covers the source (no low-attention spans)'); continue; }
+    for (const f of flagged) {
+      const probe = f.text.replace(/^[/].*?===\s*/s, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      const idx = probe ? srcText.replace(/\s+/g, ' ').indexOf(probe) : -1;
+      const line = idx >= 0 ? srcText.slice(0, srcText.indexOf(probe.split(' ')[0])).split('\n').length : null;
+      console.log(`    ⚠ ${(f.score * 100).toFixed(0)}% coverage${line ? `  (≈L${line})` : ''}  ${f.text.replace(/\s+/g, ' ').trim().slice(0, 80)}`);
+    }
+  }
+}
+
 function i18n() {
+  if (positionals()[0] === 'coverage') return i18nCoverageCmd();
   if (positionals()[0] === 'conform') return i18nConformCmd();
   const target = positionals()[0];
   if (!target || !existsSync(target)) { console.error('Usage: mari i18n <file> | mari i18n conform <file>'); process.exit(2); }
@@ -584,6 +630,7 @@ Usage:
   mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
   mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
+  mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut
