@@ -37,6 +37,12 @@ of ground truth — run it first so every edit is grounded in concrete findings,
    focus → `register` in `PRODUCT.md`: `skill/reference/register-{docs,marketing,editorial,microcopy}.md`.
 5. **Run the detector** on the target (`node skill/scripts/detect.mjs <target>`, or
    `node cli/bin/cli.js detect <target>`) and let its findings drive the edit.
+6. **Check for a developer asset.** Run `node cli/bin/cli.js asset detect <target>`. If it
+   reports a type (runbook / ADR / postmortem / RFC), load `skill/reference/asset-<type>.md`
+   and run `node cli/bin/cli.js asset check <target>`. Apply that type's structure
+   requirements, tone norms, and rubric on top of the register. This makes Mari handle these
+   assets correctly by default. To create one, scaffold from best practice with
+   `mari asset scaffold <type> "<title>"`.
 
 ## Routing
 

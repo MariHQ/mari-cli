@@ -225,6 +225,33 @@ model never attended to your facts for. The generative models download once (~2 
 mari never claims a document "is AI-written." Detectors are biased, and that's not the goal.
 It points at spans worth rewriting and claims worth verifying.
 
+## Developer assets
+
+Some documents have a job to do and an established shape to do it in. Mari recognizes four
+developer-asset archetypes and applies the right handling automatically — so the agent editing
+a runbook is held to runbook standards, not generic prose ones.
+
+```bash
+npx mari asset detect docs/adr/0007-use-postgres.md   # ADR (Architecture Decision Record) — score 10 [...]
+npx mari asset check  runbooks/restart-api.md          # flag missing canonical sections (Rollback, Escalation…)
+npx mari asset scaffold postmortem "Checkout outage"   # print a best-practice template
+```
+
+| Asset | Canonical sections checked | Convention |
+|-------|----------------------------|------------|
+| **ADR** | Status · Context · Decision · Consequences | Michael Nygard · [MADR](https://adr.github.io/madr/) |
+| **Postmortem** | Summary · Impact · Timeline · Root cause · Action items · Lessons learned (+ **blameless** tone check) | [Google SRE](https://sre.google/sre-book/example-postmortem/) · PagerDuty · Atlassian |
+| **Runbook** | Overview · Prerequisites · Steps · Rollback · Escalation | incident.io · AWS IDR |
+| **RFC / design doc** | Summary · Motivation · Alternatives · Drawbacks (+ Non-goals) | [Rust RFC](https://github.com/rust-lang/rfcs/blob/master/0000-template.md) · Oxide RFD |
+
+Detection is deterministic and tolerant — it combines directory (`docs/adr/`, `runbooks/`),
+filename (`adr-`, `*-runbook.md`), front-matter `status:`, and a quorum of distinctive headings,
+so an ordinary README or skill doc is never misclassified. Structure checks **warn** (a draft
+legitimately lacks sections); they're surfaced by `mari asset check` and the skill, not the edit
+hook. When you work on a detected asset, the `/mari` skill loads the matching review reference
+(`skill/reference/asset-<type>.md`) and applies its structure, tone, and rubric on top of the
+register.
+
 ## Supported Tools
 
 - [Cursor](https://cursor.com)

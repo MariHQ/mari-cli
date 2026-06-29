@@ -18,6 +18,7 @@ import { scoreDocument, renderScore } from '../engine/score.mjs';
 import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, decomposeClaims, lookbackGrounding, mlSlopFindings } from '../engine/ml/index.mjs';
 import { segment } from '../engine/segment.mjs';
 import * as LEX from '../engine/lexicons.mjs';
+import { detectAssetType, validateAsset, scaffold, ASSET_TYPES } from '../engine/assets.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -41,6 +42,7 @@ async function main() {
     case 'unpin': return pin(false);
     case 'factcheck': return await runFactcheck();
     case 'facts': return facts();
+    case 'asset': return asset();
     case 'live': return live();
     case undefined:
     case '--help':
@@ -379,6 +381,43 @@ function live() {
   console.log('\nPick one with --n=<k>. For bolder/quieter rewrites, run /mari live (agent-driven).');
 }
 
+// Developer-asset awareness: detect a doc's archetype (runbook/ADR/postmortem/RFC), validate
+// its canonical structure, or scaffold a best-practice template. Used by the skill to apply
+// type-specific handling by default. Structure checks warn (drafts legitimately lack sections).
+function asset() {
+  const sub = rest[0];
+  const args = positionals().slice(1);
+  const types = ASSET_TYPES.map((a) => a.type).join('|');
+
+  if (sub === 'scaffold') {
+    const tpl = scaffold(args[0], args.slice(1).join(' '));
+    if (!tpl) { console.error(`Usage: mari asset scaffold <${types}> [title]`); process.exit(2); }
+    process.stdout.write(tpl);
+    return;
+  }
+  const target = args[0];
+  if ((sub === 'detect' || sub === 'check') && (!target || !existsSync(target))) {
+    console.error('Usage: mari asset detect <file> | check <file> | scaffold <type> [title]'); process.exit(2);
+  }
+  if (sub === 'detect' || sub === 'check') {
+    const text = readFileSync(target, 'utf8');
+    const ctx = segment(text);
+    const det = detectAssetType(target, text, ctx.headings);
+    if (!det) { console.log(`No developer-asset type detected for ${target}.`); return; }
+    console.log(`Detected: ${det.label} (${det.type}) — score ${det.score} [${det.signals.join(', ')}]`);
+    if (sub === 'detect') return;
+
+    const findings = validateAsset(ctx, det.type);
+    if (!findings.length) { console.log('Structure looks complete — all canonical sections present.'); return; }
+    const sev = (s) => (s === 'error' ? 'error   ' : s === 'warn' ? 'warn    ' : 'advisory');
+    for (const f of findings) console.log(`  L${String(f.line).padEnd(4)} ${sev(f.severity)} ${f.ruleId.padEnd(22)} ${f.message}`);
+    const miss = findings.filter((f) => f.severity === 'warn').length;
+    console.log(`\n${miss} required section(s) missing · ${findings.length - miss} other note(s)`);
+    process.exit(flag('strict') && miss > 0 ? 1 : 0);
+  }
+  console.error(`Usage: mari asset detect <file> | check <file> | scaffold <${types}> [title]`); process.exit(2);
+}
+
 const PINNABLE = new Set(['audit', 'deslop', 'tighten', 'clarify', 'critique', 'polish', 'document', 'draft', 'outline', 'glossary', 'sharpen', 'soften', 'harden', 'voice', 'cadence', 'format', 'delight', 'adapt', 'localize', 'live', 'factcheck']);
 
 function pin(create) {
@@ -411,6 +450,7 @@ Usage:
   mari facts list | add "<fact>"                                Manage the fact base
   mari install [--providers=claude,cursor,codex,copilot] [--force]   Wire editor hooks
   mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>
+  mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut
