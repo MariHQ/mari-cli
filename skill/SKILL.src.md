@@ -26,9 +26,14 @@ of ground truth — run it first so every edit is grounded in concrete findings,
 
 ## Setup (run before any command)
 
+> **Deterministic commands skip this setup.** `detect`, `audit`, `asset`, and `i18n` are
+> mechanical CLI checks — they need no `PRODUCT.md`, register, or voice context. If the first
+> word is one of these, run it directly (see Routing) and skip steps 1–6. Setup applies to the
+> prose-*editing* commands (`deslop`, `tighten`, `clarify`, …).
+
 1. **Load context.** Run `node skill/scripts/context.mjs`. It prints `PRODUCT.md` (+ `STYLE.md`,
-   `FACTS.md`) or `NO_PRODUCT_MD`. If `NO_PRODUCT_MD` and the user asked for anything other than
-   `init`, run **`init`** first, then resume.
+   `FACTS.md`) or `NO_PRODUCT_MD`. If `NO_PRODUCT_MD` and the user asked for a prose-editing
+   command, run **`init`** first, then resume.
 2. **Load the command reference.** If a sub-command was named, read `skill/reference/<command>.md`
    — that's the authoritative flow.
 3. **Read the existing writing.** Sample at least one representative file so edits match the
@@ -49,12 +54,19 @@ of ground truth — run it first so every edit is grounded in concrete findings,
 - **No argument** → run the detector over the changed/target files, then surface the 2–3
   highest-value commands (many buzzword/cliché hits → `deslop`; long-sentence hits → `tighten`;
   passive/jargon → `clarify`; inclusive/heading/link hits → `audit`). Never auto-edit.
-- **First word is a command** (`init`, `document`, `draft`, `outline`, `glossary`, `audit`,
+- **First word is a deterministic command** (`detect`, `audit`, `asset`, `i18n`) → run the CLI
+  directly, skipping the setup phase (no `PRODUCT.md` needed):
+  - `asset detect|check|scaffold <file>` → `node cli/bin/cli.js asset <sub> <target>`
+  - `i18n <file>` → list a doc's translations; `i18n conform <file>` → check every translation
+    shares the source's structure (`node cli/bin/cli.js i18n conform <target>`). "i8n" means i18n.
+  - `detect`/`audit <file>` → run the detector and report.
+- **First word is an editing command** (`init`, `document`, `draft`, `outline`, `glossary`,
   `critique`, `deslop`, `tighten`, `clarify`, `polish`, `sharpen`, `soften`, `harden`, `voice`,
-  `cadence`, `format`, `delight`, `adapt`, `localize`, `live`) → load `skill/reference/<command>.md`
-  and run it; the rest of the line is the target.
+  `cadence`, `format`, `delight`, `adapt`, `localize`, `live`) → run the setup phase, load
+  `skill/reference/<command>.md`, and run it; the rest of the line is the target.
 - **Intent maps to a command** ("make this punchier" → `sharpen`, "cut this down" → `tighten`,
-  "fix the error copy" → `clarify`, "tone down the hype" → `soften`) → run that command.
+  "fix the error copy" → `clarify`, "tone down the hype" → `soften`, "are translations in sync?"
+  → `i18n conform`) → run that command.
 - **No clear match** → a general editing pass using setup context + the detector findings.
 
 ## Commands
