@@ -63,7 +63,7 @@ export function detectText(text, { config, useInlineIgnores = true } = {}) {
 }
 
 export function detectFile(path, { config, root = process.cwd(), useInlineIgnores = true, lintSource = false } = {}) {
-  const rel = relative(root, path) || basename(path);
+  const rel = (relative(root, path) || basename(path)).replace(/\\/g, '/'); // win32: globs assume '/'
   if (config?.ignoreFiles && fileIgnored(rel, config.ignoreFiles)) return null;
   const ext = extname(path).toLowerCase();
   if (isSourceFile(ext)) {
@@ -90,6 +90,13 @@ export function isSource(path) { return isSourceFile(extname(path).toLowerCase()
 // guide.ur-pk.md). English rules don't apply to other languages, so skip non-English locales.
 const NON_EN_LOCALES = new Set(('es fr de pt it ja ko zh ru ar ur hi bn pa te ta mr gu kn ml ' +
   'nl pl tr vi th id sv da no fi cs el he ro hu uk fa sw af sr hr sk bg lt lv et sl ms tl ne si km my ka az kk uz').split(' '));
+// Region/script subtags that mark a REAL locale dir (pt-br, zh-hans). Dirs like no-op/,
+// de-dup/, ml-api/, ar-core/ have a locale-looking prefix but a non-locale suffix, so a
+// `xx-yyy` dir only counts as a translation when the suffix is a known region or script.
+const LOCALE_SUBTAGS = new Set(('br cn tw hk mo sg my us gb uk au ca nz ie za in pk bd lk mx ar cl co pe ve ec uy bo py ' +
+  'cr pa do gt hn ni sv pr es pt fr be ch lu at de it nl se dk fi is pl cz sk hu ro bg gr cy tr ru ua by il sa ae eg ma ' +
+  'dz tn jo lb iq kw qa bh om ye jp kr kp th vn id ph la kh mm np ' +
+  'hans hant latn cyrl arab deva hebr thai jpan kore').split(' '));
 export function isNonEnglishLocale(path) {
   // filename suffix: README.es.md, guide.zh-CN.md
   const m = basename(path).match(/\.([a-z]{2,3})(?:-[a-zA-Z]{2,4})?\.(?:md|mdx|markdown|txt)$/i);
@@ -98,10 +105,10 @@ export function isNonEnglishLocale(path) {
   const segs = path.split(/[\\/]/);
   for (let k = 0; k < segs.length; k++) {
     const s = segs[k].toLowerCase();
-    const cm = s.match(/^content[.\-]([a-z]{2,3})(?:-[a-z]{2,4})?$/); // content.zh
-    if (cm && NON_EN_LOCALES.has(cm[1])) return true;
-    const rm = s.match(/^([a-z]{2,3})-[a-z]{2,4}$/);                  // zh-hans, pt-br
-    if (rm && NON_EN_LOCALES.has(rm[1])) return true;
+    const cm = s.match(/^content[.\-]([a-z]{2,3})(?:-([a-z]{2,4}))?$/); // content.zh
+    if (cm && NON_EN_LOCALES.has(cm[1]) && (!cm[2] || LOCALE_SUBTAGS.has(cm[2]))) return true;
+    const rm = s.match(/^([a-z]{2,3})-([a-z]{2,4})$/);                  // zh-hans, pt-br
+    if (rm && NON_EN_LOCALES.has(rm[1]) && LOCALE_SUBTAGS.has(rm[2])) return true;
     if (['i18n', 'locales', 'translations', 'lang', 'locale'].includes(s) && segs[k + 1]) {
       if (NON_EN_LOCALES.has(segs[k + 1].toLowerCase().split('-')[0])) return true;
     }
@@ -133,11 +140,17 @@ export function isGeneratedFile(name) { return SKIP_FILE.test(name); }
 export function isSkippedDir(name) { return SKIP_DIR.has(name); }
 
 function* walk(dir) {
-  for (const name of readdirSync(dir)) {
-    if (SKIP_DIR.has(name) || name.startsWith('.')) continue;
-    const p = join(dir, name);
-    const st = statSync(p);
-    if (st.isDirectory()) yield* walk(p);
-    else if (!isGeneratedFile(name)) yield p;
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    if (SKIP_DIR.has(e.name) || e.name.startsWith('.')) continue;
+    const p = join(dir, e.name);
+    if (e.isSymbolicLink()) {
+      // Never recurse through a symlinked dir (cycles); a symlinked file is fine if it resolves.
+      try { if (statSync(p).isFile() && !isGeneratedFile(e.name)) yield p; } catch { /* broken symlink */ }
+      continue;
+    }
+    if (e.isDirectory()) yield* walk(p);
+    else if (e.isFile() && !isGeneratedFile(e.name)) yield p;
   }
 }

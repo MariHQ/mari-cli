@@ -20,7 +20,7 @@ export function maskCode(text) {
     while ((m = re.exec(text))) blankRange(m.index, m.index + m[0].length);
   };
   // Front matter (metadata, not prose): YAML (--- … ---) and TOML (+++ … +++).
-  const fm = text.match(/^(---|\+\+\+)\n[\s\S]*?\n\1(?:\n|$)/);
+  const fm = text.match(/^(---|\+\+\+)\r?\n[\s\S]*?\n\1\r?(?:\n|$)/);
   if (fm) blankRange(0, fm[0].length);
   blank(/```[\s\S]*?```/g);
   blank(/~~~[\s\S]*?~~~/g);
@@ -123,7 +123,6 @@ function parseMarkdown(text, masked) {
   const imgRe = /!\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g;
   let im;
   while ((im = imgRe.exec(masked))) images.push({ alt: text.slice(im.index + 2, im.index + 2 + im[1].length), target: im[2], start: im.index });
-  const imgStarts = new Set(images.map((g) => g.start));
 
   // Inline links (skip code via masked; skip images by checking preceding '!').
   const links = [];

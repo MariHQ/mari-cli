@@ -22,6 +22,18 @@ export function addIgnore(cfg, kind, args) {
   return true;
 }
 
+// Record why an ignore was added (`--reason "…"`). Keyed by the ignored thing itself
+// (rule id, file glob, or "rule:value"), shown by `mari hooks status`.
+export function setIgnoreReason(cfg, kind, args, reason) {
+  if (!reason) return false;
+  const d = ensureDetector(cfg);
+  const key = kind === 'value' ? `${args[0]}:${args[1]}` : args[0];
+  if (!key) return false;
+  d.ignoreReasons = d.ignoreReasons || {};
+  d.ignoreReasons[key] = reason;
+  return true;
+}
+
 // Flip the post-edit hook on/off without touching the installed manifest — the detector
 // honors `hook.enabled === false` (skill/scripts/hook-lib.mjs).
 export function setHookEnabled(cfg, on) { ensureHook(cfg).enabled = !!on; return cfg; }
@@ -51,7 +63,7 @@ export function removeRule(cfg, name) {
 // returns to its default-on behavior).
 export function resetConfig(cfg) {
   const d = ensureDetector(cfg);
-  d.ignoreRules = []; d.ignoreFiles = []; d.ignoreValues = {};
+  d.ignoreRules = []; d.ignoreFiles = []; d.ignoreValues = {}; d.ignoreReasons = {};
   if (cfg.hook) delete cfg.hook.enabled;
   return cfg;
 }

@@ -10,7 +10,7 @@ const SYLL_EXCEPTIONS = {
 export function syllables(word) {
   const w = word.toLowerCase().replace(/[^a-z]/g, '');
   if (!w) return 0;
-  if (SYLL_EXCEPTIONS[w] != null) return SYLL_EXCEPTIONS[w];
+  if (Object.hasOwn(SYLL_EXCEPTIONS, w)) return SYLL_EXCEPTIONS[w];
   let s = w.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, ''); // strip silent endings
   s = s.replace(/^y/, '');
   const groups = s.match(/[aeiouy]{1,2}/g);

@@ -7,7 +7,7 @@ const SEV_PAD = { error: 'error   ', warn: 'warn    ', advisory: 'advisory' };
 
 export function sortFindings(findings) {
   return findings.slice().sort((a, b) =>
-    (SEV_RANK[a.severity] - SEV_RANK[b.severity]) || (a.line - b.line) || (a.col - b.col) || a.ruleId.localeCompare(b.ruleId));
+    ((SEV_RANK[a.severity] ?? 3) - (SEV_RANK[b.severity] ?? 3)) || (a.line - b.line) || (a.col - b.col) || a.ruleId.localeCompare(b.ruleId));
 }
 
 // merge identical (rule, offset) duplicates

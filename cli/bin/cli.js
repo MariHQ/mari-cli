@@ -7,11 +7,10 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath as _f2u } from 'node:url';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../engine/config.mjs';
-import { addIgnore, setHookEnabled, resetConfig, addRule, removeRule } from '../engine/config-write.mjs';
+import { addIgnore, setIgnoreReason, setHookEnabled, resetConfig, addRule, removeRule } from '../engine/config-write.mjs';
 import { detectText, detectTarget, PROSE_EXT } from '../engine/index.mjs';
 import { extname } from 'node:path';
 import { renderHuman, renderJSON, renderSummary, summarize } from '../engine/findings.mjs';
@@ -25,6 +24,8 @@ import { detectPlatforms, scaffoldPlatform, scaffoldablePlatforms, platformSpec 
 import { i18nAssociations, i18nConform } from '../engine/i18n.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const PKG_ROOT = join(HERE, '..', '..'); // cli/bin → package root, wherever mari is installed
+const HOOK_SCRIPT = join(PKG_ROOT, 'skill', 'scripts', 'hook.mjs'); // wired into host hook manifests
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const rest = argv.slice(1);
@@ -171,10 +172,10 @@ function writeMari(path, cfg) { writeFileSync(path, JSON.stringify(cfg, null, 2)
 
 function ignores() {
   const root = process.cwd();
-  const path = ensureMariDir(root);
-  const cfg = readMari(path);
   const sub = rest[0];
   const args = positionals().slice(1);
+  // Validate before touching disk so a typo'd subcommand never leaves an empty .mari/ behind.
+  const cfg = readMari(join(root, '.mari', 'config.json'));
   if (sub === 'list') {
     const d = cfg.detector || {};
     console.log('ignoreRules :', (d.ignoreRules || []).join(', ') || '(none)');
@@ -183,12 +184,13 @@ function ignores() {
     return;
   }
   if (!IGNORE_KIND[sub] || !addIgnore(cfg, IGNORE_KIND[sub], args)) {
-    console.error('Usage: mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value>'); process.exit(2);
+    console.error('Usage: mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value> [--reason "…"]'); process.exit(2);
   }
+  setIgnoreReason(cfg, IGNORE_KIND[sub], args, opt('reason'));
+  const path = ensureMariDir(root);
   writeMari(path, cfg);
   console.log(`Updated ${path}`);
 }
-function uniq(a) { return [...new Set(a.filter(Boolean))]; }
 
 // Each provider knows where its manifest lives and how to wire (preserving unrelated entries).
 const PROVIDERS = {
@@ -215,14 +217,15 @@ function install() {
   console.log('\nReload each harness (Claude Code: /hooks) for the hook to take effect.');
 }
 
-// Build the installed SKILL.md from skill/SKILL.src.md: the skill is read in place from this
-// repo, so rewrite its relative script/reference/CLI paths to absolute ones rooted here.
-function buildSkill(root) {
-  const src = readFileSync(join(root, 'skill', 'SKILL.src.md'), 'utf8');
+// Build the installed SKILL.md from skill/SKILL.src.md: the skill ships inside the mari
+// package (PKG_ROOT — works from any cwd, including a global npm install), so rewrite its
+// relative script/reference/CLI paths to absolute ones rooted there.
+function buildSkill() {
+  const src = readFileSync(join(PKG_ROOT, 'skill', 'SKILL.src.md'), 'utf8');
   return src
-    .replace(/\bskill\/scripts\//g, `${root}/skill/scripts/`)
-    .replace(/\bskill\/reference\//g, `${root}/skill/reference/`)
-    .replace(/\bcli\/bin\/cli\.js\b/g, `${root}/cli/bin/cli.js`);
+    .replace(/\bskill\/scripts\//g, `${PKG_ROOT}/skill/scripts/`)
+    .replace(/\bskill\/reference\//g, `${PKG_ROOT}/skill/reference/`)
+    .replace(/\bcli\/bin\/cli\.js\b/g, `${PKG_ROOT}/cli/bin/cli.js`);
 }
 // Where the skill lives: refresh every existing install (global ~/.claude and/or project
 // .claude); if none exists yet, install globally.
@@ -233,7 +236,7 @@ function skillTargets(root) {
   return existing.length ? existing : [cands[0]];
 }
 function writeSkill(root) {
-  const content = buildSkill(root);
+  const content = buildSkill();
   const written = [];
   for (const dir of skillTargets(root)) { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'SKILL.md'), content); written.push(join(dir, 'SKILL.md')); }
   return written;
@@ -243,7 +246,7 @@ function writeSkill(root) {
 // re-wire the project hooks (idempotent). What `install` does, minus the first-time prompts.
 function update() {
   const root = process.cwd();
-  if (!existsSync(join(root, 'skill', 'SKILL.src.md'))) { console.error('Run `mari update` from the Mari repo root.'); process.exit(2); }
+  if (!existsSync(join(PKG_ROOT, 'skill', 'SKILL.src.md'))) { console.error(`Mari install is incomplete: missing ${join(PKG_ROOT, 'skill', 'SKILL.src.md')}.`); process.exit(2); }
   console.log('Refreshing Mari…');
   for (const p of writeSkill(root)) console.log(`  ✓ skill → ${p}`);
   const names = ['claude', ...Object.keys(PROVIDERS).filter((n) => n !== 'claude' && existsSync(join(root, PROVIDERS[n].dir)))];
@@ -258,15 +261,21 @@ function readJsonOrAbort(path) {
 }
 function writeJson(path, obj) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(obj, null, 2) + '\n'); }
 
+// A mari hook entry from a previous version: references one of our scripts but predates
+// the --provider flag (and used cwd-relative or ${CLAUDE_PROJECT_DIR} paths). Replace on wire.
+function isMariEntry(e) { const s = JSON.stringify(e); return s.includes('hook.mjs') || s.includes('hook-before-edit.mjs'); }
+function isCurrentMariEntry(e) { return isMariEntry(e) && JSON.stringify(e).includes('--provider='); }
+function pruneStale(arr) { return arr.filter((e) => !(isMariEntry(e) && !isCurrentMariEntry(e))); }
+
 function wireClaude(root) {
   const settingsPath = join(root, '.claude', 'settings.local.json');
   const sharedPath = join(root, '.claude', 'settings.json');
-  const cmd = 'node "${CLAUDE_PROJECT_DIR}/skill/scripts/hook.mjs"';
+  const cmd = `node "${HOOK_SCRIPT}" --provider=claude`;
   if (hasMariHook(sharedPath)) { console.log('  • claude: already wired in shared settings.json'); return; }
   const settings = flag('force') && existsSync(settingsPath) ? safeRead(settingsPath) : readJsonOrAbort(settingsPath);
   settings.hooks = settings.hooks || {};
-  const arr = settings.hooks.PostToolUse = settings.hooks.PostToolUse || [];
-  if (arr.some((e) => JSON.stringify(e).includes('hook.mjs'))) { console.log('  • claude: already installed'); return; }
+  const arr = settings.hooks.PostToolUse = pruneStale(settings.hooks.PostToolUse || []);
+  if (arr.some(isCurrentMariEntry)) { console.log('  • claude: already installed'); return; }
   arr.push({ matcher: 'Edit|Write|MultiEdit', hooks: [{ type: 'command', command: cmd, timeout: 10 }] });
   writeJson(settingsPath, settings);
   console.log(`  ✓ claude → ${settingsPath} (post-edit)`);
@@ -274,31 +283,40 @@ function wireClaude(root) {
 function wireCursor(root) {
   const path = join(root, '.cursor', 'hooks.json');
   const manifest = readJsonOrAbort(path);
+  manifest.version = manifest.version || 1;
   manifest.hooks = manifest.hooks || {};
-  const arr = manifest.hooks.beforeEdit = manifest.hooks.beforeEdit || [];
-  if (arr.some((e) => JSON.stringify(e).includes('hook-before-edit.mjs'))) { console.log('  • cursor: already installed'); return; }
-  arr.push({ command: 'node skill/scripts/hook-before-edit.mjs' });
+  if (Array.isArray(manifest.hooks.beforeEdit)) delete manifest.hooks.beforeEdit; // stale pre-1.7 wiring
+  const arr = manifest.hooks.afterFileEdit = pruneStale(manifest.hooks.afterFileEdit || []);
+  if (arr.some(isCurrentMariEntry)) { console.log('  • cursor: already installed'); return; }
+  arr.push({ command: `node "${HOOK_SCRIPT}" --provider=cursor` });
   writeJson(path, manifest);
-  console.log(`  ✓ cursor → ${path} (pre-write, blocking)`);
+  console.log(`  ✓ cursor → ${path} (post-edit)`);
 }
 function wireCodex(root) {
   const path = join(root, '.codex', 'hooks.json');
   const manifest = readJsonOrAbort(path);
-  const arr = manifest.hooks = manifest.hooks || [];
-  if (arr.some((e) => JSON.stringify(e).includes('hook.mjs'))) { console.log('  • codex: already installed'); return; }
-  arr.push({ event: 'afterEdit', command: 'node skill/scripts/hook.mjs' });
+  const arr = manifest.hooks = pruneStale(manifest.hooks || []);
+  if (arr.some(isCurrentMariEntry)) { console.log('  • codex: already installed'); return; }
+  arr.push({ event: 'afterEdit', command: `node "${HOOK_SCRIPT}" --provider=codex` });
   writeJson(path, manifest);
   console.log(`  ✓ codex → ${path} (post-edit) — run /hooks in Codex to approve`);
 }
 function wireCopilot(root) {
-  const path = join(root, '.github', 'hooks', 'Mari.json');
-  const manifest = existsSync(path) ? readJsonOrAbort(path) : { event: 'postEdit', command: 'node skill/scripts/hook.mjs' };
+  const dir = join(root, '.github', 'hooks');
+  const path = join(dir, 'mari.json');
+  // Migrate the pre-rename manifest: on case-sensitive filesystems it would otherwise
+  // linger next to mari.json and fire the hook twice.
+  if (existsSync(dir) && readdirSync(dir).includes('Mari.json')) rmSync(join(dir, 'Mari.json'));
+  const existing = existsSync(path) ? readJsonOrAbort(path) : null;
+  const manifest = existing && isCurrentMariEntry(existing)
+    ? existing
+    : { event: 'postEdit', command: `node "${HOOK_SCRIPT}" --provider=copilot` };
   writeJson(path, manifest);
   console.log(`  ✓ copilot → ${path} (post-edit)`);
 }
 function safeRead(path) { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return {}; } }
 
-function hasMariHook(path, cmd) {
+function hasMariHook(path) {
   if (!existsSync(path)) return false;
   try { return JSON.stringify(JSON.parse(readFileSync(path, 'utf8'))).includes('hook.mjs'); } catch { return false; }
 }
@@ -319,33 +337,41 @@ function hooks() {
     console.log('ignoreRules    :', [...cfg.ignoreRules].join(', ') || '(none)');
     console.log('ignoreFiles    :', (cfg.ignoreFiles || []).join(', ') || '(none)');
     console.log('ignoreValues   :', JSON.stringify(cfg.ignoreValues || {}));
+    const reasons = Object.entries(cfg.ignoreReasons || {});
+    if (reasons.length) {
+      console.log('reasons        :');
+      for (const [k, v] of reasons) console.log(`  ${k} — ${v}`);
+    }
     return;
   }
 
-  const path = ensureMariDir(root);
-  const cfg = readMari(path);
+  // Validate the subcommand before touching disk so a typo never leaves an empty .mari/ behind.
+  if (sub !== 'on' && sub !== 'off' && sub !== 'reset' && !IGNORE_KIND[sub]) {
+    console.error(HOOKS_USAGE); process.exit(2);
+  }
+  const cfg = readMari(join(root, '.mari', 'config.json'));
 
   if (sub === 'on' || sub === 'off') {
     setHookEnabled(cfg, sub === 'on');
+    const path = ensureMariDir(root);
     writeMari(path, cfg);
     console.log(`Hook ${sub === 'on' ? 'enabled' : 'disabled'} (${path}).`);
     return;
   }
   if (sub === 'reset') {
     resetConfig(cfg);
+    const path = ensureMariDir(root);
     writeMari(path, cfg);
     console.log(`Reset hook ignores and enabled flag (${path}).`);
     return;
   }
-  if (IGNORE_KIND[sub]) {
-    const args = positionals().slice(1);
-    if (!addIgnore(cfg, IGNORE_KIND[sub], args)) { console.error(HOOKS_USAGE); process.exit(2); }
-    const reason = opt('reason');
-    writeMari(path, cfg);
-    console.log(`Updated ${path}${reason ? ` (reason: ${reason})` : ''}.`);
-    return;
-  }
-  console.error(HOOKS_USAGE); process.exit(2);
+  const args = positionals().slice(1);
+  if (!addIgnore(cfg, IGNORE_KIND[sub], args)) { console.error(HOOKS_USAGE); process.exit(2); }
+  const reason = opt('reason');
+  setIgnoreReason(cfg, IGNORE_KIND[sub], args, reason);
+  const path = ensureMariDir(root);
+  writeMari(path, cfg);
+  console.log(`Updated ${path}${reason ? ` (reason: ${reason})` : ''}.`);
 }
 
 const RULES_USAGE = `Usage:
@@ -401,13 +427,15 @@ async function rulesCmd() {
     return;
   }
 
-  const path = ensureMariDir(root);
-  const cfg = readMari(path);
+  // Validate (subcommand AND its args) before touching disk so a typo'd invocation never
+  // leaves an empty .mari/ behind.
+  const cfg = readMari(join(root, '.mari', 'config.json'));
 
   if (sub === 'add') {
     const name = positionals()[1];
     const ok = addRule(cfg, { name, paths: splitList(opt('paths')), notify: opt('notify'), exclude: splitList(opt('exclude')) });
     if (!ok) { console.error(RULES_USAGE); process.exit(2); }
+    const path = ensureMariDir(root);
     writeMari(path, cfg);
     console.log(`Added rule "${name}" (${path}).`);
     return;
@@ -415,6 +443,7 @@ async function rulesCmd() {
   if (sub === 'remove' || sub === 'rm') {
     const name = positionals()[1];
     if (!name || !removeRule(cfg, name)) { console.error(`No rule named "${name}".`); process.exit(2); }
+    const path = ensureMariDir(root);
     writeMari(path, cfg);
     console.log(`Removed rule "${name}" (${path}).`);
     return;
@@ -504,7 +533,7 @@ function facts() {
     return;
   }
   if (sub === 'add') {
-    const fact = positionals().slice(1).join(' ') || rest.slice(1).filter((a) => !a.startsWith('--')).join(' ');
+    const fact = positionals().slice(1).join(' ');
     if (!fact) { console.error('Usage: mari facts add "<fact>"'); process.exit(2); }
     const existing = existsSync(path) ? readFileSync(path, 'utf8') : '# FACTS\n\nGround-truth claims Mari checks prose against. One fact per line.\n\n';
     writeFileSync(path, existing.replace(/\s*$/, '') + `\n- ${fact}\n`);
@@ -520,7 +549,11 @@ function tightenSentence(s) {
   let out = s;
   const apply = (map) => {
     for (const [k, v] of Object.entries(map)) {
-      out = out.replace(new RegExp(`\\b${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), v);
+      // \b only works against word-char edges; keys ending in punctuation ("e.g.") need an
+      // explicit not-a-word-char guard or they never match.
+      const lead = /^[A-Za-z0-9_]/.test(k) ? '\\b' : '(?<![A-Za-z0-9_])';
+      const trail = /[A-Za-z0-9_]$/.test(k) ? '\\b' : '(?![A-Za-z0-9_])';
+      out = out.replace(new RegExp(`${lead}${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}${trail}`, 'gi'), v);
     }
   };
   apply(LEX.WORDY_PHRASES); apply(LEX.NOMINALIZATIONS); apply(LEX.COMPLEX_WORDS); apply(LEX.WORD_SWAP);
@@ -607,7 +640,7 @@ function walkForPlatforms(root, { maxDepth = 4, maxEntries = 20000 } = {}) {
       if (count++ > maxEntries) return;
       if (SKIP.has(e.name)) continue;
       const p = join(dir, e.name);
-      const rel = p.slice(root.length + 1);
+      const rel = p.slice(root.length + 1).replace(/\\/g, '/'); // win32: detection globs assume '/'
       if (e.isDirectory()) walk(p, depth + 1);
       else files.push(rel);
     }
@@ -681,7 +714,10 @@ function platform() {
 
 // i18n association: list the translations of a doc (or the source, if a translation is given)
 // across the common localization layouts. Powers the hook's "translations may be stale" note.
-const shortenPath = (p) => String(p).replace(process.env.HOME || '~~', '~');
+const shortenPath = (p) => {
+  const s = String(p), home = process.env.HOME;
+  return home && (s === home || s.startsWith(home + '/')) ? '~' + s.slice(home.length) : s;
+};
 
 // ─── Native attention primitive ─────────────────────────────────────────────────────────────
 // One mechanism — "how much does query text engage context text?" — drives every attention
@@ -689,7 +725,7 @@ const shortenPath = (p) => String(p).replace(process.env.HOME || '~~', '~');
 // docs↔code: stale docs). `grounding` flags QUERY rows that ignore the context (factcheck:
 // ungrounded sentences). Runs the shipped, relocatable native binary; opt-in via MARI_ATTN_MODEL.
 function mariAttnBin() {
-  const attn = join(dirname(_f2u(import.meta.url)), '..', '..', 'native', 'attn');
+  const attn = join(PKG_ROOT, 'native', 'attn');
   const shipped = join(attn, 'dist', `${process.platform}-${process.arch}`, 'mari_attn'); // prebuilt, shipped
   const built = join(attn, 'build', 'mari_attn');
   return process.env.MARI_ATTN_BIN || (existsSync(shipped) ? shipped : built);
@@ -702,7 +738,7 @@ function discoverGguf() {
   const home = process.env.HOME || '';
   const dirs = [
     join(home, '.mari', 'models'), join(home, '.cache', 'mari', 'models'),
-    join(dirname(_f2u(import.meta.url)), '..', '..', 'native', 'attn', 'models'),
+    join(PKG_ROOT, 'native', 'attn', 'models'),
     join(home, 'attn', 'cpp', 'models'),
   ];
   const found = [];
@@ -748,10 +784,12 @@ function runMariAttn(ctxFile, qryFile, { grounding = false, threshold = 0.3, que
 // file the span came from (context for coverage, query for grounding).
 function lineOfSpan(fileText, spanText) {
   const probe = spanText.replace(/^[/].*?===\s*/s, '').replace(/\s+/g, ' ').trim().slice(0, 30);
-  const word = (probe.split(' ')[0] || '');
-  if (!word || fileText.replace(/\s+/g, ' ').indexOf(probe) < 0) return null;
-  const idx = fileText.indexOf(word);
-  return idx >= 0 ? fileText.slice(0, idx).split('\n').length : null;
+  if (!probe) return null;
+  // Locate the FULL normalized probe (whitespace-tolerant), not just its first word — common
+  // first words ("The", "It") would otherwise match anywhere earlier in the file.
+  const re = new RegExp(probe.split(' ').map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'));
+  const m = fileText.match(re);
+  return m ? fileText.slice(0, m.index).split('\n').length : null;
 }
 function printAttnFindings(flagged, fileText, label) {
   if (!flagged.length) { console.log(`    ✓ ${label}`); return; }
@@ -951,12 +989,12 @@ function usage() {
 
 Usage:
   mari detect <path|.> [--json] [--summary] [--score] [--strict] [--quiet] [--stdin] [--style=microsoft|google|ap|chicago|plain] [--models] [--grammar] [--no-config]
-  mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value>
+  mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value> [--reason "…"]
   mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--ground=attention]   Check claims vs FACTS.md
   mari facts list | add "<fact>"                                Manage the fact base
   mari install [--providers=claude,cursor,codex,copilot] [--force]   Wire editor hooks + install the skill
   mari update             Refresh the installed skill + hooks from this repo
-  mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>
+  mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value> [--reason "…"]
   mari rules list | discover | add <name> --paths "<glob[,…]>" --notify "<message>" [--exclude "<glob>"] | remove <name>   Notify the agent on matching edits (e.g. update API docs)
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
   mari platform detect | list | scaffold <name> [--name "<title>"] [--force]   Set up a docs-as-code site generator (MkDocs, Docusaurus, Sphinx, …) if none exists

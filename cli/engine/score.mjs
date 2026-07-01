@@ -26,7 +26,9 @@ export function scoreDocument(text, findings, { machine = null } = {}) {
 
   // human-signal discount: contractions + first-person voice
   const contractions = (ctx.masked.match(/\b\w+['’](t|s|re|ve|ll|d|m)\b/gi) || []).length;
-  const firstPerson = (ctx.masked.match(/\b(I|I'm|we|we're|my|our|me|us)\b/g) || []).length;
+  // Case-sensitive on purpose only for bare "I" vs "i" (list item markers, math); every other
+  // pronoun counts sentence-capitalized too (We shipped…, My take…, Our plan…).
+  const firstPerson = (ctx.masked.match(/\b(I(?:['’](?:m|ve|ll|d))?|[Ww]e(?:['’](?:re|ve|ll|d))?|[Mm]y|[Oo]ur|[Mm]e|[Uu]s)\b/g) || []).length;
   const humanPer1k = ((contractions + firstPerson) / words) * 1000;
   const discount = Math.min(15, humanPer1k * 1.5);
 

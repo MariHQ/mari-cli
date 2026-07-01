@@ -4,6 +4,8 @@
 import { readFileSync } from 'node:fs';
 import { detectText, looksLikeData, isNonEnglishLocale, isGeneratedFile, isSkippedDir } from '../cli/engine/index.mjs';
 import { scoreDocument } from '../cli/engine/score.mjs';
+import { globToRe, deepMerge, parseInlineWaivers } from '../cli/engine/config.mjs';
+import { syllables, gradeLevel } from '../cli/engine/readability.mjs';
 
 const cfg = (pack) => ({ config: { ignoreRules: new Set(), ignoreValues: {}, ignoreFiles: [], styleGuide: pack || 'microsoft' }, useInlineIgnores: true });
 const rules = (text, pack) => detectText(text, cfg(pack)).map((f) => f.ruleId);
@@ -100,6 +102,27 @@ check('generated: LICENSE/NOTICE skipped', isGeneratedFile('LICENSE') && isGener
 check('generated: normal docs NOT skipped', !isGeneratedFile('README.md') && !isGeneratedFile('changelog-design.md'));
 check('violent-metaphor no longer flags "hit"', !ruleset('Check for a cache hit before the call.').includes('violent-tech-metaphor'));
 check('violent-metaphor still flags "abort"', ruleset('Abort the running job immediately.').includes('violent-tech-metaphor'));
+
+// 12. Review-findings regressions (B-series, CLI core).
+check('mari-disable (bare) waives every rule',
+  detectText('We utilize it.\n<!-- mari-disable -->', cfg()).length === 0);
+check('mari-disable rule-a, rule-b waives exactly those rules', (() => {
+  const w = parseInlineWaivers('<!-- mari-disable rule-a, rule-b -->');
+  return w.fileWide.has('rule-a') && w.fileWide.has('rule-b') && !w.fileWide.has('*');
+})());
+check('deepMerge: local config null overrides without throwing',
+  deepMerge({ detector: { x: 1 } }, { detector: null }).detector === null);
+check('glob **/*.md matches root-level README.md', globToRe('**/*.md').test('README.md'));
+check('glob with a real space survives', globToRe('my docs/*.md').test('my docs/a.md') && !globToRe('my docs/*.md').test('myXdocs/a.md'));
+check('locale: no-op / de-dup / ml-api dirs are NOT translations',
+  !isNonEnglishLocale('src/no-op/readme.md') && !isNonEnglishLocale('lib/de-dup/guide.md')
+  && !isNonEnglishLocale('ml-api/doc.md') && !isNonEnglishLocale('ar-core/doc.md'));
+check('locale: pt-br / zh-hans dirs still ARE translations',
+  isNonEnglishLocale('docs/pt-br/guide.md') && isNonEnglishLocale('docs/zh-hans/guide.md'));
+check('readability: "constructor" yields a finite syllable count / grade', (() => {
+  const s = syllables('constructor') + syllables('toString');
+  return Number.isFinite(s) && s > 0 && Number.isFinite(gradeLevel(2, 1, s, 19).grade);
+})());
 
 // 11. Vendored third-party trees skipped (oleander stress test).
 check('vendored dirs skipped (3rdparty, vendor, third_party)',
