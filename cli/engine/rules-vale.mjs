@@ -10,10 +10,17 @@ import { syllables, gradeLevel } from './readability.mjs';
 
 const per1k = (n, w) => (n / Math.max(w, 1)) * 1000;
 
+// '-ly' words that are nouns/adjectives, not adverbs — a following hyphen is legitimate
+// ("family-owned", "early-stage", "supply-chain"). Shared by ms-adverb-hyphen and
+// google-ly-hyphen so the two packs agree.
+const LY_HYPHEN_EXC = new Set(['family','early','only','supply','apply','reply','assembly','friendly','daily','weekly','monthly','yearly','hourly','ally','holy','ugly','lovely','lonely','lively','costly','deadly','silly','jelly','belly','italy','curly','burly','surly','wobbly','bubbly','gnarly','melancholy','anomaly','monopoly','panoply','wholly','homely','timely','orderly','elderly','likely','unlikely']);
+
 function mapRule(id, family, sev, map, label, pack) {
   return { id, family, defaultSeverity: sev, pack, run(ctx, emit) {
     scan(ctx, phraseList(Object.keys(map)), (m, i) => { const key = m[0].toLowerCase();
-      emitAt(ctx, emit, id, family, sev, i, m[0].length, `${label}: "${m[0]}" → "${map[key] ?? map[m[0]]}".`); }); } };
+      const repl = map[key] ?? map[m[0]];
+      if (m[0] === repl) return; // already the preferred form (case-only entries like ajax → AJAX)
+      emitAt(ctx, emit, id, family, sev, i, m[0].length, `${label}: "${m[0]}" → "${repl}".`); }); } };
 }
 function listRule(id, family, sev, words, msg, pack) {
   return { id, family, defaultSeverity: sev, pack, run(ctx, emit) {
@@ -27,7 +34,7 @@ function densityListRule(id, family, sev, words, msg, min, pack) {
 
 // Microsoft.AMPM · pack:microsoft
 const __vr_microsoft_ampm = (() => {
-const v0_ampm_RE = /\d{1,2}[AP]M|\d{1,2} ?[ap]m|\d{1,2} ?[aApP]\.[mM]\./g;
+const v0_ampm_RE = /(?:\d{1,2}[AP]M|\d{1,2} ?[ap]m|\d{1,2} ?[aApP]\.[mM]\.)(?![a-zA-Z])/g;
 const v0_ampm_rule = {
   id: 'microsoft-ampm', family: FAM.C, defaultSeverity: 'advisory', pack: 'microsoft',
   run(ctx, emit) {
@@ -193,7 +200,9 @@ return v3_firstPerson_rule;
 // Microsoft.Foreign · pack:microsoft
 const __vr_ms_foreign_abbrev = (() => {
 const v3_foreign_MAP = { 'eg': 'for example', 'e.g.': 'for example', 'ie': 'that is', 'i.e.': 'that is', 'viz.': 'namely', 'ergo': 'therefore' };
-const v3_foreign_RE = /\b(?:e\.g\.|eg|i\.e\.|ie|viz\.|ergo)(?=[\s,])/gi;
+// Dotted forms match either case; bare "eg"/"ie"/"ergo" must be lowercase so "IE" (the
+// browser) and other capitalized uses don't flag. No `i` flag — casing is intentional.
+const v3_foreign_RE = /\b(?:[eE]\.[gG]\.|[iI]\.[eE]\.|[vV]iz\.|eg|ie|ergo)(?=[\s,])/g;
 const v3_foreign_rule = {
   id: 'ms-foreign-abbrev', family: FAM.C, defaultSeverity: 'advisory', pack: 'microsoft',
   run(ctx, emit) {
@@ -221,8 +230,8 @@ const v3_genderBias_PAIRS = [
   [/\banchor(?:m[ae]n|wom[ae]n)\b/gi, 'anchor(s)'],
   [/\bauthoress\b/gi, 'author'],
   [/\bcamera(?:m[ae]n|wom[ae]n)\b/gi, 'camera operator(s)'],
-  [/\bdoor(?:m[ae]|wom[ae]n)\b/gi, 'concierge(s)'],
-  [/\bdraft(?:m[ae]n|wom[ae]n)\b/gi, 'drafter(s)'],
+  [/\bdoor(?:m[ae]n|wom[ae]n)\b/gi, 'concierge(s)'],
+  [/\bdrafts?(?:m[ae]n|wom[ae]n)\b/gi, 'drafter(s)'],
   [/\bfire(?:m[ae]n|wom[ae]n)\b/gi, 'firefighter(s)'],
   [/\bfisher(?:m[ae]n|wom[ae]n)\b/gi, 'fisher(s)'],
   [/\bfresh(?:m[ae]n|wom[ae]n)\b/gi, 'first-year student(s)'],
@@ -289,11 +298,13 @@ const v4_headingAcronyms_rule = {
   run(ctx, emit) {
     const re = /\b[A-Z]{2,4}\b/g;
     for (const h of ctx.headings) {
+      // Locate via m.index plus the text→raw prefix delta so repeated matches don't all
+      // report the first occurrence's offset.
+      const delta = Math.max(0, h.raw.indexOf(h.text));
       let m;
       re.lastIndex = 0;
       while ((m = re.exec(h.text)) !== null) {
-        const idx = h.raw.indexOf(m[0]);
-        const offset = h.start + (idx >= 0 ? idx : 0);
+        const offset = h.start + delta + m.index;
         emitAt(ctx, emit, 'microsoft-heading-acronyms', FAM.C, 'advisory', offset, m[0].length,
           `Avoid using acronyms ('${m[0]}') in a title or heading.`);
       }
@@ -313,11 +324,11 @@ const v4_headingColons_rule = {
   run(ctx, emit) {
     const re = /:\s[a-z]/g;
     for (const h of ctx.headings) {
+      const delta = Math.max(0, h.raw.indexOf(h.text));
       let m;
       re.lastIndex = 0;
       while ((m = re.exec(h.text)) !== null) {
-        const idx = h.raw.indexOf(m[0]);
-        const offset = h.start + (idx >= 0 ? idx : 0);
+        const offset = h.start + delta + m.index;
         emitAt(ctx, emit, 'microsoft-heading-colons', FAM.C, 'advisory', offset, m[0].length,
           `Capitalize the first word after a colon in a heading.`);
       }
@@ -335,7 +346,8 @@ const v5_hyphens_rule = {
   defaultSeverity: 'advisory',
   pack: 'microsoft',
   run(ctx, emit) {
-    scan(ctx, /\b[^\s-]+ly-\w+\b/g, (m, i) => {
+    scan(ctx, /\b([A-Za-z]*ly)-(\w+)\b/g, (m, i) => {
+      if (LY_HYPHEN_EXC.has(m[1].toLowerCase())) return; // "family-owned" etc. are fine
       emitAt(ctx, emit, 'ms-adverb-hyphen', FAM.C, 'advisory', i, m[0].length, `'${m[0]}' doesn't need a hyphen.`);
     });
   }
@@ -399,7 +411,7 @@ return v6_plurals_rule;
 
 // Microsoft.Quotes · pack:microsoft
 const __vr_microsoft_quotes_punctuation = (() => {
-const v7_QUOTES_RE = /[“”][^“”]+[“”][.,]/g;
+const v7_QUOTES_RE = /[“”][^“”\n]+[“”][.,]/g; // inner class excludes \n so it can't span lines
 const v7_quotes_rule = {
   id: 'microsoft-quotes-punctuation', family: FAM.C, defaultSeverity: 'warn', pack: 'microsoft',
   run(ctx, emit) {
@@ -536,7 +548,8 @@ const __vr_ms_wordiness = (() => {
 const v9_wordiness_MAP = {
   'sufficient number of': 'enough', 'sufficient number': 'enough',
   'take away': 'remove', 'eliminate': 'remove',
-  'in order to': 'to', 'as a means to': 'to', 'as a means of': 'to', 'in an effort to': 'to',
+  // 'in order to' intentionally absent — the always-on wordy-phrase rule covers it.
+  'as a means to': 'to', 'as a means of': 'to', 'in an effort to': 'to',
   'inform': 'tell', 'let me know': 'tell',
   'previous to': 'before', 'prior to': 'before',
   'utilize': 'use', 'make use of': 'use',
@@ -664,7 +677,7 @@ const v10_ampm_rule = {
   defaultSeverity: 'warn',
   pack: 'google',
   run(ctx, emit) {
-    const re = /\b\d{1,2}(?:[AP]M|\s?[ap]m|\s?[aApP]\.[mM]\.)/g;
+    const re = /\b\d{1,2}(?:[AP]M|\s?[ap]m|\s?[aApP]\.[mM]\.)(?![a-zA-Z])/g;
     scan(ctx, re, (m, i) => {
       if (ctx.isTableLine(i)) return;
       emitAt(ctx, emit, 'google-ampm', FAM.C, 'warn', i, m[0].length, "Use 'AM' or 'PM' (preceded by a space).");
@@ -783,8 +796,8 @@ const v12_genderBias_PAIRS = [
   ['anchor(?:m[ae]n|wom[ae]n)', 'anchor(s)'],
   ['authoress', 'author'],
   ['camera(?:m[ae]n|wom[ae]n)', 'camera operator(s)'],
-  ['door(?:m[ae]|wom[ae]n)', 'concierge(s)'],
-  ['draft(?:m[ae]n|wom[ae]n)', 'drafter(s)'],
+  ['door(?:m[ae]n|wom[ae]n)', 'concierge(s)'],
+  ['drafts?(?:m[ae]n|wom[ae]n)', 'drafter(s)'],
   ['fire(?:m[ae]n|wom[ae]n)', 'firefighter(s)'],
   ['fisher(?:m[ae]n|wom[ae]n)', 'fisher(s)'],
   ['fresh(?:m[ae]n|wom[ae]n)', 'first-year student(s)'],
@@ -830,7 +843,7 @@ return v12_genderBias_rule;
 
 // Google.LyHyphens · pack:google
 const __vr_google_ly_hyphen = (() => {
-const v13_ly_EXC = new Set(['family','early','only','supply','apply','reply','assembly','friendly','daily','weekly','monthly','yearly','hourly','ally','holy','ugly','lovely','lonely','lively','costly','deadly','silly','jelly','belly','italy','curly','burly','surly','wobbly','bubbly','gnarly','melancholy','anomaly','monopoly','panoply','wholly','homely','timely','orderly','elderly','likely','unlikely']);
+const v13_ly_EXC = LY_HYPHEN_EXC; // shared exception list (see top of file)
 const v13_lyhyphens_rule = {
   id: 'google-ly-hyphen', family: FAM.C, defaultSeverity: 'advisory', pack: 'google',
   run(ctx, emit) {
@@ -883,7 +896,7 @@ const v15_quotes_rule = {
   defaultSeverity: 'advisory',
   pack: 'google',
   run(ctx, emit) {
-    scan(ctx, /"[^"]+"[.,?]/g, (m, i) => {
+    scan(ctx, /"[^"\n]+"[.,?]/g, (m, i) => { // inner class excludes \n so it can't span lines
       emitAt(ctx, emit, 'google-quote-punctuation', FAM.C, 'advisory', i, m[0].length,
         'Commas and periods go inside quotation marks.');
     });
@@ -954,12 +967,11 @@ const v16_units_rule = {
   pack: 'google',
   run(ctx, emit) {
     // A number immediately joined to a data-size or time unit (no space).
-    // Trailing (?![A-Za-z]) stops the unit being part of a longer word.
-    const re = /\b(\d+)(kB|MB|GB|TB|min|ns|ms|B|h|d|s)(?![A-Za-z])/g;
+    // Trailing (?![A-Za-z]) stops the unit being part of a longer word. Ambiguous
+    // single-letter units (d/s/h/B) are excluded: "the 60s", "3d rendering", "747s".
+    const re = /\b(\d+)(kB|MB|GB|TB|min|ns|ms)(?![A-Za-z])/g;
     scan(ctx, re, (m, i) => {
       if (ctx.isTableLine(i)) return;
-      // Skip 4-digit + 's' decades like "1990s".
-      if (m[2] === 's' && m[1].length === 4) return;
       emitAt(ctx, emit, 'google-units-nbsp', FAM.C, 'advisory', i, m[0].length,
         `Put a nonbreaking space between the number and the unit in "${m[0]}".`);
     });
@@ -1022,7 +1034,7 @@ const v17_wordlist_MAP = {
   'curated roles': 'predefined roles',
   'data are': 'data is',
   'file name': 'filename',
-  'in order to': 'to',
+  // 'in order to' intentionally absent — the always-on wordy-phrase rule covers it.
   'k8s': 'Kubernetes',
   'network ip address': 'internal IP address',
   'omnibox': 'address bar',

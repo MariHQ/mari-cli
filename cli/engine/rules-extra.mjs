@@ -2,7 +2,7 @@
 // Reuses helpers/severity conventions from rules.mjs. Pack-gated rules carry a `pack`.
 
 import * as L from './lexicons.mjs';
-import { esc, wordList, phraseList, scan, emitAt, FAMILIES as FAM } from './rule-helpers.mjs';
+import { esc, wordList, phraseList, scan, emitAt, isSentenceStart, FAMILIES as FAM } from './rule-helpers.mjs';
 import { syllables, gradeLevel } from './readability.mjs';
 
 const per1k = (n, words) => (n / Math.max(words, 1)) * 1000;
@@ -14,7 +14,9 @@ function mapRule(id, family, sev, map, label, pack) {
     run(ctx, emit) {
       scan(ctx, phraseList(Object.keys(map)), (m, i) => {
         const key = m[0].toLowerCase();
-        emitAt(ctx, emit, id, family, sev, i, m[0].length, `${label}: "${m[0]}" → "${map[key] ?? map[m[0]]}".`);
+        const repl = map[key] ?? map[m[0]];
+        if (m[0] === repl) return; // already the preferred form (case-only entries)
+        emitAt(ctx, emit, id, family, sev, i, m[0].length, `${label}: "${m[0]}" → "${repl}".`);
       });
     },
   };
@@ -57,7 +59,9 @@ const tricolonOveruse = {
   run(ctx, emit) {
     const hits = [];
     scan(ctx, /\b\w+,\s+\w+,\s+and\s+\w+\b/gi, (m, i) => hits.push({ m, i }));
-    if (hits.length < 2) return;
+    // ≥3 — the *reflex* is the tell, and a lower bar makes ordinary 3-item lists unwinnable
+    // against serial-comma (which wants the Oxford comma this rule would then flag).
+    if (hits.length < 3) return;
     for (const h of hits) emitAt(ctx, emit, this.id, this.family, 'advisory', h.i, h.m[0].length, `Tricolon "A, B, and C" — one is fine; the reflex is the tell.`);
   },
 };
@@ -73,7 +77,10 @@ const superficialIng = {
     const hits = [];
     scan(ctx, /,\s+(highlighting|underscoring|emphasizing|reflecting|symbolizing|showcasing|fostering|ensuring|contributing to|paving the way)\b/gi, (m, i) => hits.push({ m, i }));
     if (hits.length < 2) return;
-    for (const h of hits) emitAt(ctx, emit, this.id, this.family, 'advisory', h.i + 2, h.m[0].length - 2, `Clause-final "${h.m[1]}" vague-significance participle.`);
+    for (const h of hits) {
+      const d = h.m[0].indexOf(h.m[1]); // ",\s+" separator isn't always 2 chars (",  x", comma+newline)
+      emitAt(ctx, emit, this.id, this.family, 'advisory', h.i + d, h.m[0].length - d, `Clause-final "${h.m[1]}" vague-significance participle.`);
+    }
   },
 };
 
@@ -196,8 +203,12 @@ const serialComma = {
   id: 'serial-comma', family: FAM.C, defaultSeverity: 'advisory',
   run(ctx, emit) {
     if (ctx.styleGuide === 'ap') return; // AP omits the serial comma — `ap-serial-comma` handles it
-    scan(ctx, /\b\w+,\s+\w+\s+(and|or)\s+\w+\b/gi, (m, i) =>
-      emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `Missing serial (Oxford) comma before "${m[1]}".`));
+    scan(ctx, /\b\w+,\s+\w+\s+(and|or)\s+\w+\b/gi, (m, i) => {
+      // Sentence-initial first token is usually an introductory adverbial ("Yesterday, John
+      // and Mary arrived"), not a list — skip it.
+      if (isSentenceStart(ctx.masked, i)) return;
+      emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `Missing serial (Oxford) comma before "${m[1]}".`);
+    });
   },
 };
 
@@ -243,7 +254,9 @@ const terminologyConsistency = {
     for (const variants of L.TERM_VARIANTS) {
       const present = variants.filter((v) => new RegExp(`\\b${esc(v)}\\b`).test(lower));
       if (present.length >= 2) {
-        const at = lower.indexOf(present[1]);
+        // Locate with the same \b regex used for verification — a plain indexOf can land
+        // inside a longer word ("screenlogin").
+        const at = new RegExp(`\\b${esc(present[1])}\\b`).exec(lower).index;
         emitAt(ctx, emit, this.id, this.family, 'advisory', at, present[1].length, `Inconsistent terminology: "${present.join('" / "')}" both used — pick one.`);
       }
     }
@@ -423,7 +436,9 @@ const hypeIntensifier = listRule('hype-intensifier', FAM.A, 'advisory', L.HYPE_I
 // Words that live in ACRONYM_ALLOW only so `undefined-acronym` ignores them — they're English
 // words / SQL keywords / callout labels, NOT acronyms, so casing-consistency must skip them.
 const ACRO_CASE_STOP = new Set(('note tip info warning important caution danger attention hint example see ' +
-  'warn error debug trace idea and or not null true false get put post head new all desc asc ok').split(' '));
+  'warn error debug trace idea and or not null true false get put post head new all desc asc ok ' +
+  // acronyms that are also common English words ("US ... us" must not flag the pronoun)
+  'us jar war zip tar bin pr ram').split(' '));
 // A known tech acronym written lowercase when the doc also uses the uppercase form (ddl vs DDL).
 const acronymCase = {
   id: 'acronym-case', family: FAM.C, defaultSeverity: 'advisory',
@@ -539,7 +554,7 @@ const personFirst = mapRule('person-first-language', FAM.D, 'warn', L.PERSON_FIR
 const genderedAddress = {
   id: 'gendered-address', family: FAM.D, defaultSeverity: 'advisory',
   run(ctx, emit) {
-    scan(ctx, /\b(guys|gentlemen|ladies)\b/gi, (m, i) => { if (m[0] === 'Guy') return; emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `Gendered address "${m[0]}" → "everyone / folks".`); });
+    scan(ctx, /\b(guys|gentlemen|ladies)\b/gi, (m, i) => emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `Gendered address "${m[0]}" → "everyone / folks".`));
   },
 };
 const techHistorical = {
@@ -577,14 +592,19 @@ const allCapsShouting = {
 // ======================= Family E extras =======================
 
 const markupLeak = {
-  id: 'markup-leak', family: FAM.E ?? 'style', defaultSeverity: 'advisory',
+  id: 'markup-leak', family: FAM.C, defaultSeverity: 'advisory',
   run(ctx, emit) { scan(ctx, /^\s{0,3}#{1,6}[^\s#]/gm, (m, i) => emitAt(ctx, emit, this.id, FAM.C, 'advisory', i, m[0].length, `Heading needs a space after "#".`)); },
 };
 const thematicBreakBeforeHeading = {
   id: 'thematic-break-before-heading', family: FAM.C, defaultSeverity: 'advisory',
   run(ctx, emit) {
     const headingLines = new Set(ctx.headings.map((h) => h.line));
-    for (const tb of ctx.thematicBreaks) { let n = tb.line + 1; while (n <= ctx.text.split('\n').length && /^\s*$/.test((ctx.text.split('\n')[n - 1] || ''))) n++; if (headingLines.has(n)) emitAt(ctx, emit, this.id, FAM.C, 'advisory', tb.start, 3, `Thematic break "---" right before a heading — an AI scaffold; remove it.`); }
+    const lines = ctx.text.split('\n'); // hoisted — don't re-split per break
+    for (const tb of ctx.thematicBreaks) {
+      let n = tb.line + 1;
+      while (n <= lines.length && /^\s*$/.test(lines[n - 1] || '')) n++;
+      if (headingLines.has(n)) emitAt(ctx, emit, this.id, FAM.C, 'advisory', tb.start, 3, `Thematic break "---" right before a heading — an AI scaffold; remove it.`);
+    }
   },
 };
 const bulletOveruse = {
@@ -617,6 +637,8 @@ const indefiniteArticle = {
       const startsVowel = /^[aeiou]/.test(w);
       if (art === 'a' && startsVowel && !aVowel.has(w)) emitAt(ctx, emit, this.id, FAM.C, 'advisory', i, m[0].length, `"a ${m[2]}" → "an ${m[2]}".`);
       else if (art === 'an' && !startsVowel && !anConsonant.has(w)) emitAt(ctx, emit, this.id, FAM.C, 'advisory', i, m[0].length, `"an ${m[2]}" → "a ${m[2]}".`);
+      else if (art === 'an' && startsVowel && aVowel.has(w)) emitAt(ctx, emit, this.id, FAM.C, 'advisory', i, m[0].length, `"an ${m[2]}" → "a ${m[2]}" (consonant sound).`); // "an user"
+      else if (art === 'a' && !startsVowel && anConsonant.has(w)) emitAt(ctx, emit, this.id, FAM.C, 'advisory', i, m[0].length, `"a ${m[2]}" → "an ${m[2]}" (vowel sound).`); // "a hour"
     });
   },
 };

@@ -20,7 +20,7 @@ const overusedWord = {
     const density = (hits.length / Math.max(ctx.wordCount, 1)) * 1000; // real per-1k rate
     const score = (weighted / Math.max(ctx.wordCount, 1)) * 1000;       // weighted by over-use ratio
     // co-occurrence of distinct style words is the real signal; a lone hit never fires
-    const gate = distinct.size >= 2 || density >= 4;
+    const gate = distinct.size >= 2 || (hits.length >= 2 && density >= 4);
     if (!gate) return;
     // never 'error' — "overused word" is a judgment call (meta-docs about writing quote these
     // words densely), so it caps at warn to avoid false CI failures.
@@ -203,7 +203,8 @@ const hedgeOveruse = {
     const hits = [];
     scan(ctx, phraseList(L.HEDGES), (m, i) => hits.push({ m, i }));
     const per1k = (hits.length / Math.max(ctx.wordCount, 1)) * 1000;
-    if (hits.length < 2 && per1k < 3) return;
+    if (hits.length < 2) return; // density rules never fire on a single match
+    if (hits.length < 3 && per1k < 3) return;
     for (const h of hits)
       emitAt(ctx, emit, this.id, this.family, hits.length >= 4 ? 'warn' : 'advisory', h.i, h.m[0].length, `Hedge "${h.m[0]}" — commit to the claim.`);
   },
@@ -213,13 +214,24 @@ const hedgeOveruse = {
 
 const IRREGULAR_PP = new Set('arisen awoken beaten begun broken brought built chosen done drawn driven eaten fallen forgotten frozen given gone grown hidden known made paid seen sold sent shown taken thrown told thought woven written found held kept led lost meant met put read run set'.split(' '));
 const ADJ_PARTICIPLE = new Set('interested located excited based related done born involved supposed used pleased concerned tired limited known given dedicated committed advanced detailed'.split(' '));
+// Words that end in -ed/-en but are NOT past participles — without this, "are even", "was
+// seven", "is open" all read as passive voice.
+const NOT_PARTICIPLE = new Set(('even often seven open aspen been keen teen green screen then when hen pen ten ' +
+  'amen omen alien barren brazen dozen garden golden heaven eleven hyphen kitchen linen listen oxygen siren ' +
+  'sudden wooden woolen children happen chicken token red bed shed wed hundred indeed sacred naked ' +
+  'wicked wretched crooked rugged ragged jagged hatred kindred').split(' '));
 
 const passiveVoice = {
   id: 'passive-voice', family: FAM.B, defaultSeverity: 'advisory',
   run(ctx, emit) {
-    const re = /\b(am|is|are|was|were|be|been|being)\s+(?:\w+ly\s+){0,2}([a-z]+(?:ed|en))\b/gi;
+    // Regular -ed/-en participles plus the irregular forms (sent, made, put, …) — the
+    // irregular alternation is required or IRREGULAR_PP would be unreachable.
+    const re = new RegExp(
+      '\\b(am|is|are|was|were|be|been|being)\\s+(?:\\w+ly\\s+){0,2}([a-z]+(?:ed|en)|' +
+      [...IRREGULAR_PP].join('|') + ')\\b', 'gi');
     scan(ctx, re, (m, i) => {
       const pp = m[2].toLowerCase();
+      if (NOT_PARTICIPLE.has(pp)) return;
       const isPP = pp.endsWith('ed') || pp.endsWith('en') || IRREGULAR_PP.has(pp);
       if (!isPP) return;
       const after = ctx.masked.slice(i + m[0].length, i + m[0].length + 30);
@@ -264,6 +276,7 @@ const weaselWord = {
     const hits = [];
     scan(ctx, wordList(L.WEASEL_WORDS), (m, i) => hits.push({ m, i }));
     const per1k = (hits.length / Math.max(ctx.wordCount, 1)) * 1000;
+    if (hits.length < 2) return; // density rules never fire on a single match
     if (hits.length < 3 && per1k < 4) return;
     for (const h of hits) emitAt(ctx, emit, this.id, this.family, 'advisory', h.i, h.m[0].length, `Weasel word "${h.m[0]}" — usually deletable.`);
   },
@@ -314,7 +327,6 @@ const sentenceCaseHeading = {
         if (idx === 0) return;
         if (SMALL_WORDS.has(w.toLowerCase())) return;
         if (/^[A-Z]{2,}$/.test(w)) return; // acronym
-        if (/^[A-Z]/.test(w) && w.toLowerCase() === w.slice(1).toLowerCase() + w[0]) {} // noop
         if (/^[A-Z][a-z]/.test(w)) capped++;
       });
       if (capped >= 2) {
@@ -341,11 +353,19 @@ const headingEndPunctuation = {
   },
 };
 
+// Keys the active style pack already covers with its own rule — the pack rule takes
+// precedence so the same token isn't reported twice (ms-foreign-abbrev / latinism-abbreviation).
+const WORD_SWAP_PACK_COVERED = {
+  microsoft: new Set(['e.g.', 'i.e.']),
+  google: new Set(['e.g.', 'i.e.', 'etc']),
+};
 const wordSwap = {
   id: 'word-swap', family: FAM.C, defaultSeverity: 'advisory',
   run(ctx, emit) {
+    const covered = WORD_SWAP_PACK_COVERED[ctx.styleGuide];
     scan(ctx, phraseList(Object.keys(L.WORD_SWAP)), (m, i) => {
       const key = m[0].toLowerCase();
+      if (covered && covered.has(key)) return;
       emitAt(ctx, emit, this.id, this.family, 'advisory', i, m[0].length, `Style swap: "${m[0]}" → "${L.WORD_SWAP[key]}".`, 'MS/Google word list');
     });
   },
@@ -353,11 +373,19 @@ const wordSwap = {
 
 // ---- Family D: inclusive & accessible -------------------------------------
 
+// Terms the ms/google gender-bias pack rules also match — under those packs the pack rule
+// takes precedence so the same word isn't reported twice.
+const GENDERED_PACK_COVERED = new Set([
+  'mankind', 'manpower', 'salesman', 'salesmen', 'policeman', 'policemen',
+  'fireman', 'firemen', 'stewardess', 'mailman', 'freshman',
+]);
 const gendered = {
   id: 'gendered-language', family: FAM.D, defaultSeverity: 'warn',
   run(ctx, emit) {
+    const packCovers = ctx.styleGuide === 'microsoft' || ctx.styleGuide === 'google';
     scan(ctx, wordList(Object.keys(L.GENDERED)), (m, i) => {
       const key = m[0].toLowerCase();
+      if (packCovers && GENDERED_PACK_COVERED.has(key)) return;
       emitAt(ctx, emit, this.id, this.family, 'warn', i, m[0].length, `Gendered term "${m[0]}" → "${L.GENDERED[key]}".`);
     });
   },

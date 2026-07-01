@@ -77,7 +77,8 @@ export const COMPLEX_WORDS = {
 // Style-guide term swaps (Microsoft/Google), kept distinct from concision swaps above.
 export const WORD_SWAP = {
   leverage: 'use', 'e.g.': 'for example', 'i.e.': 'that is', etc: 'and so on',
-  abort: 'stop', execute: 'run', 'grayed out': 'unavailable', 'and/or': 'or',
+  // 'abort' intentionally absent — the always-on violent-tech-metaphor rule covers it.
+  execute: 'run', 'grayed out': 'unavailable', 'and/or': 'or',
   deselect: 'clear', login: 'sign in (verb)', 'log in': 'sign in', 'e-mail': 'email',
   'check box': 'checkbox', 'drop-down': 'dropdown',
 };

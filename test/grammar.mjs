@@ -8,7 +8,12 @@ let pass = 0, fail = 0;
 const check = (name, cond) => { if (cond) pass++; else { fail++; console.log('  ✗ ' + name); } };
 
 if (!(await grammarAvailable())) {
-  console.log('grammar: harper.js not installed — skipping (npm install harper.js to enable)');
+  console.log('');
+  console.log('==================================================================');
+  console.log('  SKIP: grammar tests NOT RUN — harper.js is not installed.');
+  console.log('  Run `npm i harper.js` to enable the optional grammar pass.');
+  console.log('==================================================================');
+  console.log('');
   process.exit(0);
 }
 

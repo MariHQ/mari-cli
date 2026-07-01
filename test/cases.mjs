@@ -57,8 +57,10 @@ export const CASES = [
 
   // ---- Family B: clarity & concision ----
   { rule: 'passive-voice',
-    bad: 'The cake was eaten by the dog.',
-    good: 'The dog ate the cake.' },
+    // irregular participle ("sent") must flag too — the -ed/-en regex alone missed it
+    bad: 'The cake was eaten by the dog. The report was sent by the intern.',
+    // "are even" is not passive — non-participle -en words must not flag
+    good: 'The dog ate the cake. The results are even better now.' },
   { rule: 'long-sentence',
     bad: 'This sentence keeps going well past any reasonable ceiling because it stacks clause upon clause and refuses to stop adding more words until it has clearly crossed thirty words total here now.',
     good: 'This sentence is short.' },
@@ -114,8 +116,8 @@ export const CASES = [
     bad: 'We ship fast, not slow. We optimize, not guess.',
     good: 'We ship fast and optimize carefully.' },
   { rule: 'tricolon-overuse',
-    bad: 'We test apples, oranges, and pears. We love red, white, and blue.',
-    good: 'We test apples and pears.' },
+    bad: 'We test apples, oranges, and pears. We love red, white, and blue. We ship fast, clean, and small.',
+    good: 'We test apples, oranges, and pears. The rest is prose.' },
   { rule: 'serves-as-copula',
     bad: 'It serves as a guide and serves as a map for the team.',
     good: 'It is a guide for the team.' },
@@ -166,8 +168,8 @@ export const CASES = [
     bad: 'We do not ship on Fridays.',
     good: "We don't ship on Fridays." },
   { rule: 'second-person',
-    bad: 'The user should click Save to continue.',
-    good: 'Click Save to continue.' },
+    bad: 'The user should click Save to continue. Users can configure the endpoint.',
+    good: 'Click Save to continue. You can configure the endpoint.' },
   { rule: 'present-tense',
     bad: 'You will see a confirmation dialog.',
     good: 'You see a confirmation dialog.' },
@@ -255,9 +257,6 @@ export const CASES = [
   { rule: 'inconsistent-capitalization',
     bad: 'The Catalog Store holds the entries; update the catalog store after a change.',
     good: 'The catalog store holds the entries; update the catalog store after a change.' },
-  { rule: 'second-person',
-    bad: 'Users can configure the endpoint.',
-    good: 'You can configure the endpoint.' },
 
   // ===== Markdown structure / quality =====
   { rule: 'emphasis-as-heading',
@@ -327,8 +326,9 @@ export const CASES = [
     bad: 'Enter your PIN number to continue.',
     good: 'Enter your PIN to continue.' },
   { rule: 'indefinite-article',
-    bad: 'It is a apple on the table.',
-    good: 'It is an apple on the table.' },
+    // "an user" is wrong ("user" has a consonant sound) — the exception-list branch
+    bad: 'It is a apple on the table. Ask an user to confirm.',
+    good: 'It is an apple on the table. Ask a user to confirm. Wait an hour.' },
 
   // ===== Family F: citations =====
   { rule: 'placeholder-citation',
@@ -347,7 +347,8 @@ export const CASES = [
   // ---- Vale-parity pack (Microsoft/Google/AP/Chicago/Plain) ----
   { rule: "microsoft-ampm", pack: "microsoft",
     bad: "The webinar starts at 3PM and the recording posts by 9 pm.",
-    good: "The webinar starts at 3 PM and the recording posts by 9 PM." },
+    // "5 amps" / "2 amendments" must not read as "5 am" + trailing letters
+    good: "The webinar starts at 3 PM. The circuit draws 5 amps and covers 2 amendments." },
   { rule: "microsoft-accessibility", pack: "microsoft",
     bad: "He is a victim of stroke and suffers from chronic pain.",
     good: "He had a stroke and lives with chronic pain." },
@@ -380,13 +381,14 @@ export const CASES = [
     good: "The team updates the profile settings for everyone." },
   { rule: "ms-foreign-abbrev", pack: "microsoft",
     bad: "Pick a database, eg PostgreSQL, for storage.",
-    good: "Pick a database such as PostgreSQL for storage." },
+    // capitalized "IE" (the browser) must not read as bare "ie"
+    good: "Pick a database such as PostgreSQL for storage. IE support was dropped." },
   { rule: "ms-gender-slash", pack: "microsoft",
     bad: "Ask he/she to sign in before continuing.",
     good: "Ask the user to sign in before continuing." },
   { rule: "ms-gender-bias", pack: "microsoft",
-    bad: "We need more manpower to staff the launch.",
-    good: "We need more staff to run the launch." },
+    bad: "The doorman said we need more manpower to staff the launch.",
+    good: "The concierge said we need more staff to run the launch." },
   { rule: "microsoft-general-url", pack: "microsoft",
     bad: "Enter the URL in the box and press Go.",
     good: "Enter the web address in the box and press Go." },
@@ -440,7 +442,7 @@ export const CASES = [
     good: "You should use the system to fix it because it works." },
   { rule: "google-ampm", pack: "google",
     bad: "Let's sync up at 3pm before the standup.",
-    good: "Let's sync up at 3 PM before the standup." },
+    good: "Let's sync up at 3 PM before the standup. The heater draws 5 amps." },
   { rule: "google-contractions", pack: "google",
     bad: "It is ready and we are shipping it now.",
     good: "It's ready and we're shipping it now." },
@@ -460,8 +462,8 @@ export const CASES = [
     bad: "Each user can update he/she profile from the settings page.",
     good: "Each user can update their profile from the settings page." },
   { rule: "google-gender-bias", pack: "google",
-    bad: "A fireman and a policeman arrived to inspect the manmade structure.",
-    good: "A firefighter and a police officer arrived to inspect the manufactured structure." },
+    bad: "A fireman, a doorman and a policeman arrived to inspect the manmade structure.",
+    good: "A firefighter, a concierge and a police officer arrived to inspect the manufactured structure." },
   { rule: "google-ly-hyphen", pack: "google",
     bad: "Use a newly-created token for each request.",
     good: "Use a newly created token for each request." },
@@ -493,8 +495,9 @@ export const CASES = [
     bad: "The installer will download files and will then restart.",
     good: "The installer downloads files and then restarts." },
   { rule: "google-word-list", pack: "google",
-    bad: "Send me an e-mail in order to confirm the change.",
-    good: "Send me an email to confirm the change." },
+    bad: "Send me an e-mail to confirm the change to the ajax call.",
+    // correctly-cased "AJAX" must not flag itself (case-only map entry)
+    good: "Send me an email to confirm the change to the AJAX call." },
   { rule: "ap-percent", pack: "ap",
     bad: "Adoption rose 20% last quarter.",
     good: "Adoption rose 20 percent last quarter." },

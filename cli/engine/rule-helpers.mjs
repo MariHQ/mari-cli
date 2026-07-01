@@ -17,7 +17,9 @@ export function wordList(words) { return new RegExp(`\\b(${words.map(esc).join('
 
 export function phraseList(phrases) {
   const sorted = [...phrases].sort((a, b) => b.length - a.length); // longest first
-  return new RegExp(`(${sorted.map(esc).join('|')})`, 'gi');
+  // Word-boundary guards via lookarounds rather than \b: keys may end in punctuation
+  // ("e.g.", "etc.") where a trailing \b would never match after the dot.
+  return new RegExp(`(?<![A-Za-z0-9_])(${sorted.map(esc).join('|')})(?![A-Za-z0-9_])`, 'gi');
 }
 
 export function scan(ctx, re, cb) {

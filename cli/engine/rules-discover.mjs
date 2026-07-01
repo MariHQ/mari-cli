@@ -27,7 +27,7 @@ function scan(root, { maxDepth = 5, maxEntries = 20000 } = {}) {
     try { entries = readdirSync(dir); } catch { return; }
     for (const name of entries) {
       if (count++ > maxEntries) return;
-      if (name.startsWith('.') && name !== '.env.example') continue;
+      if (name.startsWith('.') && name !== '.env.example' && name !== '.env.sample') continue;
       if (SKIP_DIR.has(name)) continue;
       const p = join(dir, name);
       let st; try { st = statSync(p); } catch { continue; }

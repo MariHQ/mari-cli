@@ -18,11 +18,23 @@ let _linterPromise = null;
 // preposition"). Disabling by rule name keeps the good catches in those kinds (e.g. its/it's).
 const DISABLE_RULES = ['MassNouns', 'MissingPreposition'];
 
+let _missingWarned = false;
+
 async function getLinter() {
   if (!_linterPromise) {
     _linterPromise = (async () => {
-      const { LocalLinter } = await import('harper.js');
-      const { binary } = await import('harper.js/binary');
+      let LocalLinter, binary;
+      try {
+        ({ LocalLinter } = await import('harper.js'));
+        ({ binary } = await import('harper.js/binary'));
+      } catch (e) {
+        // harper.js is an optional install — degrade with one clear line, never a stack trace.
+        if (!_missingWarned) {
+          _missingWarned = true;
+          console.error('mari: grammar pass skipped — harper.js is not installed. Run `npm i harper.js` to enable it.');
+        }
+        throw e;
+      }
       const linter = new LocalLinter({ binary });
       await linter.setup();
       try {
@@ -56,6 +68,18 @@ export const DEFAULT_GRAMMAR_KINDS = new Set([
   'Redundancy',    // "and also" → "and"
 ]);
 
+// Harper reports spans as Unicode-scalar (code point) indices; JS strings are UTF-16, so any
+// astral character (emoji, some CJK) before a span would shift every later offset. Returns a
+// scalar→UTF-16 offset converter; identity when the text has no surrogate pairs.
+function makeScalarToUtf16(text) {
+  if (!/[\uD800-\uDBFF]/.test(text)) return (i) => i;
+  const map = [];
+  let u = 0;
+  for (const ch of text) { map.push(u); u += ch.length; }
+  map.push(u); // end-of-text sentinel so span.end converts too
+  return (i) => map[Math.max(0, Math.min(i, map.length - 1))];
+}
+
 // 1-based (line, col) from a char offset.
 function makeLocator(text) {
   const starts = [0];
@@ -78,14 +102,15 @@ export async function detectGrammar(text, { kinds = DEFAULT_GRAMMAR_KINDS, max =
   } catch { return []; }
 
   const locate = makeLocator(text);
+  const toUtf16 = makeScalarToUtf16(text);
   const out = [];
   for (const l of lints) {
     let kind;
     try { kind = l.lint_kind(); } catch { continue; }
     if (kinds && !kinds.has(kind)) continue;
     const span = l.span();
-    const offset = span.start;
-    const length = Math.max(0, span.end - span.start);
+    const offset = toUtf16(span.start);
+    const length = Math.max(0, toUtf16(span.end) - offset);
     const problem = (l.get_problem_text() || '').replace(/\s+/g, ' ').trim();
     const suggestions = l.suggestions().map((s) => s.get_replacement_text()).filter((s) => s != null).slice(0, 3);
     const fix = suggestions.length
