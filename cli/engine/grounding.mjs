@@ -237,24 +237,45 @@ export async function factcheckNLI(docText, facts, { sourceMode = false, nli }) 
   return sortFindings(findings);
 }
 
-// Tier 0 + Tier 2 + Tier 3: decompose each sentence into atomic claims (via `decompose`, an
-// async text→string[] fn), then ground EACH atomic claim with the same retrieve→typed-span→NLI
-// pipeline. Atomic claims are model paraphrases with no source offset, so every finding is
-// anchored to its PARENT sentence and carries the atomic claim in the message. Falls back to
-// whole-sentence grounding when decomposition yields nothing.
+// A sentence worth decomposing: long enough, and carrying a typed span (number/date/…) or
+// enough content words to hold a checkable fact. Shared so `--emit-claim-targets` prints exactly
+// the sentences `factcheckDecomposed` will ground — index alignment between the two is free.
+function isClaimCandidate(parent) {
+  return parent.length >= 12 && (typedSpans(parent).length > 0 || contentTokens(parent).length >= 4);
+}
+
+// The candidate sentences (in document order) that decomposition should split. Claude decomposes
+// these in-session (via the mari skill); the returned order is the contract for `--claims`.
+export function claimTargets(docText) {
+  return segment(docText).sentences.map((s) => s.text.trim()).filter(isClaimCandidate);
+}
+
+// Tier 0 + Tier 2 + Tier 3: decompose sentences into atomic claims (via `decompose`, an async
+// batch fn: string[] sentences → string[][] claims aligned by index), then ground EACH atomic
+// claim with the same retrieve→typed-span→NLI pipeline. Decomposition is NOT a local model — it's
+// done by Claude (the mari skill feeds pre-split claims via `--claims`), so `decompose` is just
+// whatever the caller supplies. Atomic claims have no source offset, so every finding is anchored
+// to its PARENT sentence and carries the atomic claim in the message. Falls back to whole-sentence
+// grounding when decomposition yields nothing for a sentence.
 export async function factcheckDecomposed(docText, facts, { sourceMode = false, nli, decompose }) {
   const ctx = segment(docText);
   const findings = [];
   const emit = (f) => { const { line, col } = ctx.locate(f.offset); findings.push({ ...f, line, col, family: 'grounding', source: 'grounding' }); };
 
+  // Pre-filter to the same candidates `claimTargets` emits, so supplied claims align by index.
+  const candidates = [];
   for (const s of ctx.sentences) {
     const parent = s.text.trim();
-    if (parent.length < 12) continue;
-    // pre-filter: only pay for the LLM on sentences that could carry a checkable fact
-    if (!(typedSpans(parent).length > 0 || contentTokens(parent).length >= 4)) continue;
+    if (isClaimCandidate(parent)) candidates.push({ s, parent });
+  }
 
-    let claims = [];
-    try { claims = await decompose(parent); } catch { claims = []; }
+  // Decompose all candidates at once (the caller decides how — the CLI passes claims Claude wrote).
+  let claimsByIdx = [];
+  try { claimsByIdx = await decompose(candidates.map((c) => c.parent)); } catch { claimsByIdx = []; }
+
+  for (let i = 0; i < candidates.length; i++) {
+    const { s, parent } = candidates[i];
+    let claims = claimsByIdx[i] || [];
     if (!claims.length) claims = [parent];
 
     const at = { offset: s.start, length: Math.min(parent.length, 70) };

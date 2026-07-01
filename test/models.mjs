@@ -3,7 +3,8 @@
 // run), so it's a separate `npm run test:models`, not part of the fast default suite.
 
 import { nliEntail, perplexity, machineScore, capabilities, slopSpans, shutdown,
-  decomposeClaims, lookbackGrounding, warmupGenerative } from '../cli/engine/ml/index.mjs';
+  lookbackGrounding, warmupGenerative } from '../cli/engine/ml/index.mjs';
+import { claudeDecomposeBatch, claudeCliAvailable } from '../cli/engine/decompose.mjs';
 import { factcheckNLI, factcheckDecomposed, factcheckLookback, parseFacts } from '../cli/engine/grounding.mjs';
 
 let pass = 0, fail = 0;
@@ -56,17 +57,20 @@ check('NLI factcheck catches semantic contradiction', finds.some((f) => f.ruleId
 const spans = await slopSpans('Our world-class platform empowers seamless synergy.', ['marketing buzzword', 'jargon'], 0.1);
 check('GLiNER returns an array of spans', Array.isArray(spans), `(${spans.length} spans)`);
 
-// --- Tier 2: atomic-claim decomposition (structural, not string-exact) ---
-await warmupGenerative({ decompose: true });
-const claims = await decomposeClaims('Mari, built in 2026, ships 90 rules and runs on the CPU.');
-check('decompose returns multiple atomic claims', Array.isArray(claims) && claims.length >= 2, `(${claims.length})`);
-check('decompose preserves the number 90', claims.some((c) => /\b90\b/.test(c)));
-check('decompose preserves the year 2026', claims.some((c) => /\b2026\b/.test(c)));
-const dFacts = parseFacts('- Mari ships 90 rules.\n- Mari runs on the CPU.');
-const dFinds = await factcheckDecomposed('Mari ships 62 rules and runs on the CPU.', dFacts, { nli: nliEntail, decompose: decomposeClaims });
-check('decomposed factcheck isolates the bad atomic claim',
-  dFinds.some((f) => f.ruleId === 'number-date-mismatch' || f.ruleId === 'contradicts-fact'),
-  `(${dFinds.map((f) => f.ruleId).join(',') || 'none'})`);
+// --- Tier 2: atomic-claim decomposition (Claude-backed; needs the `claude` CLI) ---
+if (!claudeCliAvailable()) {
+  console.log('  ~ decompose tests SKIPPED (claude CLI not available; set MARI_CLAUDE_BIN to enable)');
+} else {
+  const [claims] = await claudeDecomposeBatch(['Mari, built in 2026, ships 90 rules and runs on the CPU.']);
+  check('decompose returns multiple atomic claims', Array.isArray(claims) && claims.length >= 2, `(${claims.length})`);
+  check('decompose preserves the number 90', claims.some((c) => /\b90\b/.test(c)));
+  check('decompose preserves the year 2026', claims.some((c) => /\b2026\b/.test(c)));
+  const dFacts = parseFacts('- Mari ships 90 rules.\n- Mari runs on the CPU.');
+  const dFinds = await factcheckDecomposed('Mari ships 62 rules and runs on the CPU.', dFacts, { nli: nliEntail, decompose: claudeDecomposeBatch });
+  check('decomposed factcheck isolates the bad atomic claim',
+    dFinds.some((f) => f.ruleId === 'number-date-mismatch' || f.ruleId === 'contradicts-fact'),
+    `(${dFinds.map((f) => f.ruleId).join(',') || 'none'})`);
+}
 
 // --- Tier 4: Lookback-Lens (relative ordering, robust to absolute-value drift) ---
 await warmupGenerative({ lookback: true });

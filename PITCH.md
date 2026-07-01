@@ -80,7 +80,7 @@ decomposition.
 |------|:---:|--------------|------|
 | **Deterministic** | ✅ always | Regex, wordlists, density thresholds, structural/markdown analysis | instant, no download |
 | **Local models** | ✅ default (auto-cached once) | GLiNER slop-span extraction, small NLI/classifier for grounding & fuzzy slop, perplexity/burstiness | small encoder models, CPU, no GPU/API |
-| **Generative (opt-in)** | opt-in | Qwen for attention-grounding (Lookback Lens) + LLM atomic-claim decomposition | a generative LLM on-device |
+| **Generative (opt-in)** | opt-in | Qwen for attention-grounding (Lookback Lens) on-device; atomic-claim decomposition delegated to Claude (live session or `claude` CLI) | on-device attention model + a Claude call for decomposition |
 
 A `--no-models` mode runs the pure-deterministic tier alone for locked-down/offline environments
 (no download at all). Grounding additionally requires a `FACTS.md`.

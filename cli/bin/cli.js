@@ -14,9 +14,10 @@ import { addIgnore, setIgnoreReason, setHookEnabled, resetConfig, addRule, remov
 import { detectText, detectTarget, PROSE_EXT } from '../engine/index.mjs';
 import { extname } from 'node:path';
 import { renderHuman, renderJSON, renderSummary, summarize } from '../engine/findings.mjs';
-import { parseFacts, factcheck, factcheckNLI, factcheckDecomposed, factcheckLookback, sortFindings } from '../engine/grounding.mjs';
+import { parseFacts, factcheck, factcheckNLI, factcheckDecomposed, factcheckLookback, claimTargets, sortFindings } from '../engine/grounding.mjs';
 import { scoreDocument, renderScore } from '../engine/score.mjs';
-import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, decomposeClaims, lookbackGrounding, mlSlopFindings, embed } from '../engine/ml/index.mjs';
+import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, lookbackGrounding, mlSlopFindings, embed } from '../engine/ml/index.mjs';
+import { claudeDecomposeBatch, claudeCliAvailable, loadClaimsFile, insideClaudeSession } from '../engine/decompose.mjs';
 import { buildAssoc, loadAssoc, saveAssoc, associationsForFile, assocDir } from '../engine/assoc.mjs';
 import { tmpdir } from 'node:os';
 import { segment } from '../engine/segment.mjs';
@@ -34,7 +35,7 @@ const rest = argv.slice(1);
 
 // Value-taking options accept both `--opt=value` and `--opt value`. Listed so positionals()
 // can skip a space-form value and not mistake it for a positional argument.
-const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model', 'limit', 'paths', 'notify', 'exclude', 'name']);
+const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model', 'limit', 'paths', 'notify', 'exclude', 'name', 'claims']);
 function flag(name) { return rest.includes(`--${name}`); }
 function opt(name, def = null) {
   const eq = rest.find((a) => a.startsWith(`--${name}=`));
@@ -470,7 +471,17 @@ async function rulesCmd() {
 async function runFactcheck() {
   const root = process.cwd();
   const target = positionals()[0];
-  if (!target || !existsSync(target)) { console.error('Usage: mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--deep]'); process.exit(2); }
+  if (!target || !existsSync(target)) { console.error('Usage: mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--claims <file>] [--deep]'); process.exit(2); }
+
+  // --emit-claim-targets: print the candidate sentences the skill should decompose, then exit.
+  // The mari skill runs this, splits each into atomic claims in-session, writes them to a file,
+  // and re-runs factcheck with --claims — so decomposition happens in Claude, with no spawn.
+  if (flag('emit-claim-targets')) {
+    const doc = readFileSync(target, 'utf8');
+    console.log(JSON.stringify({ targets: claimTargets(doc) }, null, flag('json') ? 0 : 2));
+    return;
+  }
+
   const sourcePath = opt('source');
   const factsFilePath = sourcePath || join(root, 'FACTS.md'); // facts file for --deep grounding
   const withAttn = attnDecision(); // --deep (opt-in): run the attention grounding pass
@@ -488,7 +499,8 @@ async function runFactcheck() {
   if (!facts.length) { console.error('No facts to check against.'); process.exit(2); }
 
   const docText = readFileSync(target, 'utf8');
-  const wantDecompose = flag('decompose');
+  const claimsFile = opt('claims');
+  const wantDecompose = flag('decompose') || !!claimsFile;
   const wantLookback = flag('lookback') || opt('ground') === 'attention';
   const useModels = flag('models') || modelsEnabled() || wantDecompose || wantLookback;
   let findings;
@@ -497,12 +509,35 @@ async function runFactcheck() {
     console.error('--lookback / --ground=attention needs the source: pass --source <file>.'); process.exit(2);
   }
   if (wantDecompose || wantLookback) {
+    // Both paths need the sidecar: decompose grounds each claim with NLI, lookback needs the
+    // attention model. Decomposition itself is done by Claude, never a sidecar model.
     if (!capabilities().available) { console.error('Mari ML sidecar unavailable: no Python venv (.venv) or ml/mari_ml.py. Run: python3.12 -m venv .venv && .venv/bin/pip install -r ml/requirements.txt'); process.exit(2); }
-    console.error('(loading generative grounding models — first run downloads ~1–2 GB)…');
+
+    // Resolve where atomic claims come from. Order: an explicit --claims file (the skill path —
+    // Claude already decomposed in-session, no spawn) → standalone `claude -p` (top-level, only
+    // when NOT inside a session) → otherwise fall back to whole-sentence NLI (decompose = null).
+    let decompose = null;
+    if (wantDecompose) {
+      const nTargets = claimTargets(docText).length;
+      if (claimsFile) {
+        if (!existsSync(claimsFile)) { console.error(`No such --claims file: ${claimsFile}`); process.exit(2); }
+        const claims = loadClaimsFile(claimsFile, nTargets);
+        decompose = async () => claims;
+      } else if (insideClaudeSession()) {
+        console.error('(inside a Claude session — not nesting a `claude -p`. For atomic-claim decomposition run the `/mari factcheck` skill, or pass --claims (see `--emit-claim-targets`). Falling back to whole-sentence NLI.)');
+      } else if (claudeCliAvailable()) {
+        decompose = claudeDecomposeBatch; // standalone: one top-level claude -p for the document
+      } else {
+        console.error('(--decompose needs Claude to split claims, but no `claude` CLI was found and no --claims file was given. Install the CLI, set MARI_CLAUDE_BIN, or pass --claims. Falling back to whole-sentence NLI.)');
+      }
+    }
+
+    console.error(wantLookback ? '(loading attention grounding model — first run downloads ~1 GB)…'
+      : decompose ? '(loading NLI model; decomposing claims via Claude)…' : '(loading NLI model for entailment checking…)');
     try {
-      await warmupGenerative({ decompose: wantDecompose, lookback: wantLookback });
-      findings = wantDecompose
-        ? await factcheckDecomposed(docText, facts, { sourceMode, nli: nliEntail, decompose: decomposeClaims })
+      await warmupGenerative({ nli: wantDecompose, lookback: wantLookback });
+      findings = decompose
+        ? await factcheckDecomposed(docText, facts, { sourceMode, nli: nliEntail, decompose })
         : await factcheckNLI(docText, facts, { sourceMode, nli: nliEntail });
       if (wantLookback) findings = sortFindings([...findings, ...await factcheckLookback(docText, facts, { lookback: lookbackGrounding })]);
     } catch (e) {
@@ -1082,7 +1117,8 @@ function usage() {
 Usage:
   mari detect <path|.> [--json] [--summary] [--score] [--strict] [--quiet] [--stdin] [--style=microsoft|google|ap|chicago|plain] [--models] [--slop-spans] [--grammar] [--no-config]
   mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value> [--reason "…"]
-  mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--ground=attention]   Check claims vs FACTS.md
+  mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--claims <file>] [--ground=attention]   Check claims vs FACTS.md
+                        (--decompose splits sentences into atomic claims — via Claude standalone, or the /mari skill in-session; --emit-claim-targets prints the sentences to decompose)
   mari facts list | add "<fact>"                                Manage the fact base
   mari install [--providers=claude,cursor,codex,copilot] [--force]   Wire editor hooks + install the skill
   mari update             Refresh the installed skill + hooks from this repo

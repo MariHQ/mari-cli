@@ -240,10 +240,13 @@ It runs cheapest-first: a deterministic pass aligns numbers, dates, and named en
 your text and your facts (the wrong-number tell), then a small local NLI model (CPU, runs by
 default) labels each claim **Supported / Contradicted / Unsupported** with the evidence line
 attached. A contradiction is an error; an unsupported claim is advisory (absence isn't disproof).
-Two **opt-in** generative tiers go deeper, both on-device and no API key: `--decompose` breaks
-each sentence into atomic claims (Qwen2.5-0.5B-Instruct) so one bad clause in a true sentence is
-caught, and `--ground=attention` runs a Lookback-Lens pass (Qwen3-0.6B) that flags spans the
-model never attended to your facts for. The generative models download once (~2 GB) and cache.
+Two **opt-in** generative tiers go deeper. `--decompose` breaks each sentence into atomic claims
+so one bad clause in a true sentence is caught; claim extraction is delegated to Claude (the live
+session when Mari runs as a plugin, otherwise the `claude` CLI) rather than a bundled model — the
+orchestrating model already does this far better than a tiny local instruct LM would. Each atomic
+claim is then checked by the local NLI model. `--ground=attention` runs an on-device Lookback-Lens
+pass (Qwen3-0.6B, downloads once and caches) that flags spans the model never attended to your
+facts for.
 
 mari never claims a document "is AI-written." Detectors are biased, and that's not the goal.
 It points at spans worth rewriting and claims worth verifying.

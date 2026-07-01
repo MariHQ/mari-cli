@@ -52,8 +52,8 @@ export function capabilities() {
     available: !!pythonPath() && existsSync(SCRIPT),
     runtime: 'python sidecar (torch/transformers/gliner)',
     models: { nli: 'cross-encoder/nli-deberta-v3-xsmall', ppl: process.env.MARI_PPL_MODEL || 'Qwen/Qwen3.5-0.8B', gliner: process.env.MARI_GLINER_MODEL || 'urchade/gliner_multi-v2.1',
-      decomp: process.env.MARI_DECOMP_MODEL || 'Qwen/Qwen2.5-0.5B-Instruct', lookback: process.env.MARI_LOOKBACK_MODEL || 'Qwen/Qwen3-0.6B',
-      embed: process.env.MARI_EMBED_MODEL || 'Qwen/Qwen3.5-0.8B' },
+      lookback: process.env.MARI_LOOKBACK_MODEL || 'Qwen/Qwen3-0.6B', embed: process.env.MARI_EMBED_MODEL || 'Qwen/Qwen3.5-0.8B' },
+    // Tier 2 decomposition is delegated to Claude (see engine/decompose.mjs), not a local model.
   };
 }
 
@@ -122,12 +122,6 @@ export async function embed(texts, { instruct } = {}) {
 }
 export function cosine(a, b) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
 
-// Tier 2: atomic-claim decomposition (instruct LM). A sentence → array of self-contained claims.
-export async function decomposeClaims(text) {
-  const r = await request({ task: 'decompose', text });
-  return r.claims || [];
-}
-
 // Tier 4: Lookback-Lens attention grounding. spans = [[start,end],…] char offsets into
 // `candidate`. Returns [{start,end,lookback,grounded}] — low lookback = the model didn't attend
 // to the provided context at that span.
@@ -137,11 +131,13 @@ export async function lookbackGrounding(context, candidate, spans, threshold = 0
 }
 
 // Opt-in warmup for the heavy generative models — only touched when the caller asks for the
-// corresponding tier, so the default `--models` path (NLI/ppl/GLiNER) never loads them.
-export async function warmupGenerative({ decompose = false, lookback = false } = {}) {
+// corresponding tier, so the default `--models` path (NLI/ppl/GLiNER) never loads them. Note
+// decomposition is no longer a sidecar model (it's a Claude call), so only lookback warms here;
+// the decompose grounding path still needs NLI, which `warmup({ nli })` covers.
+export async function warmupGenerative({ nli = false, lookback = false } = {}) {
   await request({ task: 'ping' });
   const jobs = [];
-  if (decompose) jobs.push(request({ task: 'decompose', text: 'Mari was built in 2026.' }).catch(() => {}));
+  if (nli) jobs.push(request({ task: 'nli', premise: 'a', hypothesis: 'a' }).catch(() => {}));
   if (lookback) jobs.push(request({ task: 'lookback', context: 'Mari was built in 2026.', candidate: 'Mari was built in 2026.', spans: [[0, 24]] }).catch(() => {}));
   await Promise.all(jobs);
 }

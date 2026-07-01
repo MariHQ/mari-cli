@@ -10,7 +10,6 @@ Requests:
   {"task":"nli","premise":..,"hypothesis":..}            -> {"label":..,"scores":{...}}
   {"task":"perplexity","text":..}                        -> {"ppl":float}
   {"task":"spans","text":..,"labels":[..],"threshold":n} -> {"spans":[{text,label,score,start,end}]}
-  {"task":"decompose","text":..}                         -> {"claims":[str,...]}
   {"task":"lookback","context":..,"candidate":..,
    "spans":[[start,end],...]?,"threshold":n?}            -> {"spans":[{start,end,lookback,grounded}],
                                                              "threshold":n,"n_ctx_tokens":i,"n_cand_tokens":i}
@@ -38,9 +37,10 @@ GLINER_MODEL = os.environ.get("MARI_GLINER_MODEL", "urchade/gliner_multi-v2.1")
 # "hedge" — the model is an NER model, so labels that read like entity types work best.
 SLOP_LABELS = ["marketing buzzword", "hype phrase", "vague corporate jargon",
                "empty filler phrase", "overused cliche"]
-# Generative grounding tier (opt-in, heavier): Tier 2 atomic-claim decomposition (instruct LM)
-# and Tier 4 Lookback-Lens attention grounding (needs eager attention to read the matrices).
-DECOMP_MODEL = os.environ.get("MARI_DECOMP_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+# Generative grounding tier (opt-in, heavier): Tier 4 Lookback-Lens attention grounding (needs
+# eager attention to read the matrices). Tier 2 atomic-claim decomposition is no longer a local
+# model — it's delegated to Claude (the live session when embedded, else `claude -p`), so a tiny
+# instruct LM never has to do a job the orchestrating model already does far better.
 LOOKBACK_MODEL = os.environ.get("MARI_LOOKBACK_MODEL", "Qwen/Qwen3-0.6B")
 
 _state = {}
@@ -144,10 +144,6 @@ def get_embed():
         model.to(_device())
         return (tok, model)
     return _cached("embed", _load)
-
-
-def get_decomp():
-    return _cached("decomp", lambda: _load_causal(DECOMP_MODEL))
 
 
 def get_lookback():
@@ -273,61 +269,6 @@ def do_spans(req):
     return {"spans": spans}
 
 
-# --- Tier 2: atomic-claim decomposition ------------------------------------------------------
-DECOMP_SYS = (
-    "You split a sentence into atomic factual claims. An atomic claim states exactly one fact, "
-    "is self-contained, and resolves all pronouns and references to explicit names from the "
-    "sentence. Copy numbers, dates, names, and quantities verbatim — never invent or alter them. "
-    "Ignore opinions, questions, instructions, and hedges. Output ONLY a JSON array of strings. "
-    "If there is no checkable factual claim, output []."
-)
-DECOMP_FEWSHOT = [
-    ("Mari, built in 2026, ships 90 rules and runs on the CPU.",
-     '["Mari was built in 2026.", "Mari ships 90 rules.", "Mari runs on the CPU."]'),
-    ("We think the new dashboard is pretty slick.", "[]"),
-]
-
-
-def _parse_claim_json(text, fallback):
-    import re
-    m = re.search(r"\[.*\]", text, re.S)
-    if not m:
-        return []
-    try:
-        arr = json.loads(m.group(0))
-    except Exception:
-        return []
-    out, seen = [], set()
-    for c in arr:
-        if not isinstance(c, str):
-            continue
-        c = c.strip()
-        # drop empties, dupes, and runaway generations padding facts that weren't in the source
-        if c and c.lower() not in seen and len(c) <= 2 * len(fallback) + 40:
-            seen.add(c.lower())
-            out.append(c)
-    return out[:8]
-
-
-def do_decompose(req):
-    torch = _torch()
-    tok, model = get_decomp()
-    sent = req["text"].strip()
-    msgs = [{"role": "system", "content": DECOMP_SYS}]
-    for u, a in DECOMP_FEWSHOT:
-        msgs.append({"role": "user", "content": u})
-        msgs.append({"role": "assistant", "content": a})
-    msgs.append({"role": "user", "content": sent})
-    prompt = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
-    ids = tok(prompt, return_tensors="pt").input_ids.to(_device())
-    with torch.no_grad():
-        out = model.generate(
-            ids, max_new_tokens=192, do_sample=False, num_beams=1,
-            repetition_penalty=1.05, pad_token_id=tok.eos_token_id)
-    gen = tok.decode(out[0, ids.shape[1]:], skip_special_tokens=True).strip()
-    return {"claims": _parse_claim_json(gen, sent)}
-
-
 # --- Tier 4: Lookback-Lens attention grounding ----------------------------------------------
 def do_lookback(req):
     torch = _torch()
@@ -378,7 +319,7 @@ def do_lookback(req):
 
 
 HANDLERS = {"nli": do_nli, "perplexity": do_perplexity, "spans": do_spans,
-            "decompose": do_decompose, "lookback": do_lookback, "embed": do_embed}
+            "lookback": do_lookback, "embed": do_embed}
 
 
 def main():
@@ -392,7 +333,7 @@ def main():
             task = req.get("task")
             if task == "ping":
                 resp = {"ok": True, "models": {"nli": NLI_MODEL, "ppl": PPL_MODEL, "gliner": GLINER_MODEL,
-                                               "decomp": DECOMP_MODEL, "lookback": LOOKBACK_MODEL, "embed": EMBED_MODEL}}
+                                               "lookback": LOOKBACK_MODEL, "embed": EMBED_MODEL}}
             elif task in HANDLERS:
                 t0 = time.time()
                 resp = HANDLERS[task](req)
