@@ -67,6 +67,28 @@ ok(reloaded && reloaded.associations.length === index.associations.length, 'inde
 writeFileSync(join(dir, 'src/charge.test.js'), 'test("x", () => {});\n');
 ok(!walkFiles(dir).includes('src/charge.test.js'), 'walkFiles skips *.test.js');
 
+// --- Lance vector store + ANN recall (real, package installed) -----------------------------------
+{
+  const lance = await import('../cli/engine/assoc-lance.mjs');
+  const ldir = join(dir, '.mari', 'assoc', 'lance');
+  const c = [
+    { id: 'L1', file: 'a.md', startLine: 1, endLine: 3, _fhash: 'h1' },
+    { id: 'L1', file: 'b.js', startLine: 1, endLine: 3, _fhash: 'h2' },
+    { id: 'L1', file: 'c.md', startLine: 1, endLine: 3, _fhash: 'h3' },
+  ];
+  const v = fakeEmbed(['charge the customer card receipt event',
+    'charge the customer card receipt event transaction', 'rain sunshine valley weather forecast']);
+  const wrote = await lance.lanceWrite(ldir, c, v);
+  ok(wrote === 3, 'lanceWrite persists all chunks');
+  const cache = await lance.lanceLoadCache(ldir);
+  ok(cache.get('a.md#L1')?.hash === 'h1' && cache.get('a.md#L1').v.length === v[0].length, 'lanceLoadCache round-trips vectors + hash');
+  const pairs = await lance.lanceRecall(ldir, c, v, { annK: 5, cosThreshold: 0.3 });
+  const files = pairs.map((p) => [c[p.i].file, c[p.j].file].sort().join('~'));
+  ok(files.includes('a.md~b.js'), 'lanceRecall finds the a↔b neighbor');
+  ok(!files.some((f) => f.includes('c.md')), 'lanceRecall excludes the unrelated chunk');
+  ok(pairs.every((p) => c[p.i].file !== c[p.j].file), 'lanceRecall excludes same-file pairs');
+}
+
 rmSync(dir, { recursive: true, force: true });
 
 console.log(`\nAssoc: ${checks} checks · ${checks - failed} passed · ${failed} failed`);

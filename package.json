@@ -23,5 +23,8 @@
     "ml",
     "fixtures",
     "native/attn/dist"
-  ]
+  ],
+  "dependencies": {
+    "@lancedb/lancedb": "^0.30.0"
+  }
 }

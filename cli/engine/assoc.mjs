@@ -115,15 +115,17 @@ function annCandidates(vecs, chunks, { cosThreshold, annK }) {
 
 // ── build ───────────────────────────────────────────────────────────────────────────────────────
 export async function buildAssoc(root, {
-  embedFn, attnFn = null, vectorCache = new Map(),
-  cosThreshold = 0.55, annK = 8, attnThreshold = 0.3, onProgress = () => {},
+  embedFn, attnFn = null, vectorCache = new Map(), lanceDir = null,
+  // Embeddings are loose RECALL — shortlist candidate pairs cheaply; attention (or the cosine
+  // itself, without --attn) decides the association. A permissive floor suits recall, especially
+  // with the Qwen base LM whose cosines run compressed. Tune with MARI_ASSOC_COS.
+  cosThreshold = +(process.env.MARI_ASSOC_COS || 0.35), annK = 8, attnThreshold = 0.3, onProgress = () => {},
 } = {}) {
   if (typeof embedFn !== 'function') throw new Error('buildAssoc needs embedFn — associations are built on embeddings.');
   const rels = walkFiles(root);
   onProgress(`scanning ${rels.length} files`);
   const chunks = [];
   const files = {};
-  const texts = new Map();
   for (const rel of rels) {
     const abs = join(root, rel);
     let text; try { if (statSync(abs).size > MAX_FILE_BYTES) continue; text = readFileSync(abs, 'utf8'); } catch { continue; }
@@ -131,13 +133,28 @@ export async function buildAssoc(root, {
     const cs = chunkFile(text, rel);
     for (const c of cs) { c._fhash = hash; chunks.push(c); }
     files[rel] = { hash, chunks: cs.length };
-    texts.set(rel, text);
+  }
+
+  // Vectors + nearest-neighbor recall go through Lance when a lanceDir is given (the CLI path);
+  // tests/fallback use an in-memory cache + brute-force cosine.
+  let lance = null;
+  if (lanceDir) {
+    lance = await import('./assoc-lance.mjs');
+    const cached = await lance.lanceLoadCache(lanceDir);
+    for (const [k, v] of cached) if (!vectorCache.has(k)) vectorCache.set(k, v);
   }
   onProgress(`chunked into ${chunks.length} chunks; embedding`);
   const vecs = await embedChunks(embedFn, chunks, vectorCache, onProgress);
 
-  onProgress('recall: nearest neighbors');
-  const cands = annCandidates(vecs, chunks, { cosThreshold, annK });
+  let cands;
+  if (lance) {
+    onProgress('storing vectors in Lance + ANN recall');
+    await lance.lanceWrite(lanceDir, chunks, vecs);
+    cands = await lance.lanceRecall(lanceDir, chunks, vecs, { annK, cosThreshold });
+  } else {
+    onProgress('recall: nearest neighbors');
+    cands = annCandidates(vecs, chunks, { cosThreshold, annK });
+  }
   onProgress(`${cands.length} candidate pairs`);
 
   let associations = [];

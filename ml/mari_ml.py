@@ -25,12 +25,10 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 NLI_MODEL = os.environ.get("MARI_NLI_MODEL", "cross-encoder/nli-deberta-v3-xsmall")
 PPL_MODEL = os.environ.get("MARI_PPL_MODEL", "Qwen/Qwen3.5-0.8B")
-# Sentence embeddings for code<->doc association (mari assoc). Qwen3-Embedding-0.6B is a
-# decoder embedder (last-token pooling + query instruction, see do_embed) purpose-built for
-# retrieval incl. code — on Flink it separates code<->doc better than a generic MiniLM. Override
-# with MARI_EMBED_MODEL (e.g. sentence-transformers/all-MiniLM-L6-v2 for a light mean-pool model,
-# or a Qwen base LM). No sentence-transformers dependency: loaded via AutoModel + manual pooling.
-EMBED_MODEL = os.environ.get("MARI_EMBED_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+# Embeddings for `mari assoc` use the SAME Qwen3.5-0.8B we standardized on for perplexity and
+# attention — one model for the whole tier (one download, one resident copy). It's a decoder, so
+# do_embed uses last-token pooling (auto-selected by the "qwen" name). Override MARI_EMBED_MODEL.
+EMBED_MODEL = os.environ.get("MARI_EMBED_MODEL", "Qwen/Qwen3.5-0.8B")
 # gliner_multi (mDeBERTa base) is used over gliner_small: on abstract stylistic labels the
 # small model's zero-shot scores are noise (a clean "Flink" outscores real buzzwords), while
 # multi cleanly separates slop (~0.2-0.3) from clean prose (<0.12). It's also multilingual,

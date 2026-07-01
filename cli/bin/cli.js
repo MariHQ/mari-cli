@@ -17,7 +17,7 @@ import { renderHuman, renderJSON, renderSummary, summarize } from '../engine/fin
 import { parseFacts, factcheck, factcheckNLI, factcheckDecomposed, factcheckLookback, sortFindings } from '../engine/grounding.mjs';
 import { scoreDocument, renderScore } from '../engine/score.mjs';
 import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, decomposeClaims, lookbackGrounding, mlSlopFindings, embed } from '../engine/ml/index.mjs';
-import { buildAssoc, loadAssoc, saveAssoc, loadVectorCache, associationsForFile } from '../engine/assoc.mjs';
+import { buildAssoc, loadAssoc, saveAssoc, associationsForFile, assocDir } from '../engine/assoc.mjs';
 import { tmpdir } from 'node:os';
 import { segment } from '../engine/segment.mjs';
 import * as LEX from '../engine/lexicons.mjs';
@@ -855,11 +855,14 @@ function attnAssociate(textA, textB) {
     const dir = join(tmpdir(), 'mari-assoc'); mkdirSync(dir, { recursive: true });
     const cf = join(dir, 'a.txt'), qf = join(dir, 'b.txt');
     writeFileSync(cf, textA); writeFileSync(qf, textB);
-    const res = runMariAttn(cf, qf, { grounding: true, threshold: 0.3, querySegment: 'paragraph' });
+    // Sentence-level query rows so the score is graded: the fraction of B's rows that actually
+    // attend to A. (A single paragraph collapses to one row and can't discriminate.)
+    const res = runMariAttn(cf, qf, { grounding: true, threshold: 0.3, querySegment: 'sentence' });
     if (res.error) return { associated: false, score: 0 };
-    const flagged = res.out.flagged || [];
-    // grounding flags query rows that ignore the context; few flagged ⇒ the two chunks engage.
-    return { associated: flagged.length === 0, score: flagged.length === 0 ? 1 : 0.5 };
+    const rows = res.out.query_rows || 1;
+    const flagged = (res.out.flagged || []).length;
+    const score = Math.max(0, 1 - flagged / Math.max(rows, 1)); // engaged fraction of B
+    return { associated: score >= (+(process.env.MARI_ASSOC_ATTN || 0.5)), score: Math.round(score * 1000) / 1000 };
   } catch { return { associated: false, score: 0 }; }
 }
 
@@ -880,11 +883,12 @@ async function assocCmd() {
     }
     console.error(`(embedding with ${capabilities().models.embed} — first run downloads the model…)`);
     const embedFn = (texts) => embed(texts);
-    const vectorCache = loadVectorCache(root);
-    const { index, stats } = await buildAssoc(root, { embedFn, attnFn, vectorCache, onProgress: (m) => console.error(`  · ${m}`) });
+    const lanceDir = join(assocDir(root), 'lance'); // vectors persist as a Lance table
+    const { index, stats } = await buildAssoc(root, { embedFn, attnFn, lanceDir, onProgress: (m) => console.error(`  · ${m}`) });
     index.builtAt = new Date().toISOString();
-    saveAssoc(root, index, vectorCache);
-    console.log(`✓ .mari/assoc/index.json — ${stats.associations} associations (via ${index.via}) from ${stats.chunks} chunks across ${stats.files} files.`);
+    index.vectorStore = 'lance';
+    saveAssoc(root, index); // index.json only — vectors live in Lance
+    console.log(`✓ .mari/assoc — ${stats.associations} associations (via ${index.via}) from ${stats.chunks} chunks across ${stats.files} files; vectors in Lance.`);
     return;
   }
 
