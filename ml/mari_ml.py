@@ -10,9 +10,13 @@ Requests:
   {"task":"nli","premise":..,"hypothesis":..}            -> {"label":..,"scores":{...}}
   {"task":"perplexity","text":..}                        -> {"ppl":float}
   {"task":"spans","text":..,"labels":[..],"threshold":n} -> {"spans":[{text,label,score,start,end}]}
+  {"task":"decompose","text":..}                         -> {"claims":[str,...]}
+  {"task":"lookback","context":..,"candidate":..,
+   "spans":[[start,end],...]?,"threshold":n?}            -> {"spans":[{start,end,lookback,grounded}],
+                                                             "threshold":n,"n_ctx_tokens":i,"n_cand_tokens":i}
 Any request may come back as {"error":"..."}.
 """
-import os, sys, json, math, warnings
+import os, sys, json, math, time, warnings
 
 warnings.filterwarnings("ignore")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
@@ -20,8 +24,16 @@ os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 NLI_MODEL = os.environ.get("MARI_NLI_MODEL", "cross-encoder/nli-deberta-v3-xsmall")
-PPL_MODEL = os.environ.get("MARI_PPL_MODEL", "Qwen/Qwen3-0.6B")
-GLINER_MODEL = os.environ.get("MARI_GLINER_MODEL", "urchade/gliner_small-v2.1")
+PPL_MODEL = os.environ.get("MARI_PPL_MODEL", "Qwen/Qwen3.5-0.8B")
+# gliner_multi (mDeBERTa base) is used over gliner_small: on abstract stylistic labels the
+# small model's zero-shot scores are noise (a clean "Flink" outscores real buzzwords), while
+# multi cleanly separates slop (~0.2-0.3) from clean prose (<0.12). It's also multilingual,
+# which matters for localized docs.
+GLINER_MODEL = os.environ.get("MARI_GLINER_MODEL", "urchade/gliner_multi-v2.1")
+# Concrete, noun-phrase-shaped labels score far higher on GLiNER than abstract ones like
+# "hedge" — the model is an NER model, so labels that read like entity types work best.
+SLOP_LABELS = ["marketing buzzword", "hype phrase", "vague corporate jargon",
+               "empty filler phrase", "overused cliche"]
 # Generative grounding tier (opt-in, heavier): Tier 2 atomic-claim decomposition (instruct LM)
 # and Tier 4 Lookback-Lens attention grounding (needs eager attention to read the matrices).
 DECOMP_MODEL = os.environ.get("MARI_DECOMP_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
@@ -39,6 +51,29 @@ def _torch():
     return torch
 
 
+def _device():
+    """mps > cuda > cpu (override with MARI_DEVICE). fp32-on-CPU was the old default and is
+    5-20x slower than fp16 on an Apple-Silicon GPU for the causal LMs."""
+    if "device" not in _state:
+        torch = _torch()
+        dev = os.environ.get("MARI_DEVICE")
+        if not dev:
+            if torch.backends.mps.is_available():
+                dev = "mps"
+            elif torch.cuda.is_available():
+                dev = "cuda"
+            else:
+                dev = "cpu"
+        _state["device"] = dev
+        log(f"[mari-ml] device={dev}")
+    return _state["device"]
+
+
+def _lm_dtype():
+    torch = _torch()
+    return torch.float16 if _device() in ("mps", "cuda") else torch.float32
+
+
 def get_nli():
     if "nli" not in _state:
         from transformers import AutoTokenizer, AutoModelForSequenceClassification
@@ -46,6 +81,7 @@ def get_nli():
         tok = AutoTokenizer.from_pretrained(NLI_MODEL)
         model = AutoModelForSequenceClassification.from_pretrained(NLI_MODEL)
         model.eval()
+        model.to(_device())
         _state["nli"] = (tok, model, model.config.id2label)
     return _state["nli"]
 
@@ -57,8 +93,9 @@ def get_lm():
         log(f"[mari-ml] loading LM {PPL_MODEL} (first run downloads weights) ...")
         tok = AutoTokenizer.from_pretrained(PPL_MODEL, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
-            PPL_MODEL, torch_dtype=torch.float32, trust_remote_code=True)
+            PPL_MODEL, torch_dtype=_lm_dtype(), trust_remote_code=True)
         model.eval()
+        model.to(_device())
         _state["lm"] = (tok, model)
     return _state["lm"]
 
@@ -78,8 +115,9 @@ def get_decomp():
         log(f"[mari-ml] loading decomposer {DECOMP_MODEL} (first run downloads weights) ...")
         tok = AutoTokenizer.from_pretrained(DECOMP_MODEL, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
-            DECOMP_MODEL, torch_dtype=torch.float32, trust_remote_code=True)
+            DECOMP_MODEL, torch_dtype=_lm_dtype(), trust_remote_code=True)
         model.eval()
+        model.to(_device())
         _state["decomp"] = (tok, model)
     return _state["decomp"]
 
@@ -91,9 +129,10 @@ def get_lookback():
         log(f"[mari-ml] loading lookback LM {LOOKBACK_MODEL} (eager attn) ...")
         tok = AutoTokenizer.from_pretrained(LOOKBACK_MODEL, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
-            LOOKBACK_MODEL, torch_dtype=torch.float32,
+            LOOKBACK_MODEL, torch_dtype=_lm_dtype(),
             attn_implementation="eager", trust_remote_code=True)
         model.eval()
+        model.to(_device())
         _state["lookback"] = (tok, model)
     return _state["lookback"]
 
@@ -102,8 +141,9 @@ def do_nli(req):
     torch = _torch()
     tok, model, id2label = get_nli()
     inputs = tok(req["premise"], req["hypothesis"], return_tensors="pt", truncation=True, max_length=256)
+    inputs = {k: v.to(_device()) for k, v in inputs.items()}
     with torch.no_grad():
-        logits = model(**inputs).logits[0]
+        logits = model(**inputs).logits[0].float()
     probs = torch.softmax(logits, dim=-1).tolist()
     scores = {str(id2label[i]).lower(): round(float(p), 4) for i, p in enumerate(probs)}
     label = max(scores, key=scores.get)
@@ -113,22 +153,62 @@ def do_nli(req):
 def do_perplexity(req):
     torch = _torch()
     tok, model = get_lm()
-    ids = tok(req["text"], return_tensors="pt", truncation=True, max_length=512).input_ids
-    if ids.shape[1] < 2:
+    # A single 512-token window would score only the intro of a long doc. Score up to
+    # MARI_PPL_WINDOWS windows spread across the text and average the loss token-weighted.
+    all_ids = tok(req["text"], return_tensors="pt").input_ids[0]
+    if all_ids.shape[0] < 2:
         return {"ppl": None}
+    win, max_windows = 512, int(os.environ.get("MARI_PPL_WINDOWS", "4"))
+    n = all_ids.shape[0]
+    if n <= win:
+        starts = [0]
+    else:
+        k = min(max_windows, max(2, (n + win - 1) // win))
+        starts = [round(i * (n - win) / (k - 1)) for i in range(k)]
+    tot_loss, tot_toks = 0.0, 0
     with torch.no_grad():
-        loss = model(ids, labels=ids).loss
+        for s in starts:
+            ids = all_ids[s:s + win].unsqueeze(0).to(_device())
+            loss = model(ids, labels=ids).loss
+            tot_loss += float(loss.item()) * (ids.shape[1] - 1)
+            tot_toks += ids.shape[1] - 1
     # clamp: exp(>709) overflows to OverflowError on gibberish; cap at a very-high-ppl sentinel
-    return {"ppl": round(float(math.exp(min(loss.item(), 700.0))), 3)}
+    return {"ppl": round(float(math.exp(min(tot_loss / max(tot_toks, 1), 700.0))), 3)}
+
+
+def _chunks(text, size=1000):
+    """Yield (offset, chunk) one chunk PER paragraph — never merging paragraphs.
+
+    GLiNER's zero-shot slop scores are strongly context-dependent: a buzzword phrase
+    scores ~0.19 in an isolated marketing paragraph but ~0.07 when a clean technical
+    paragraph is scored alongside it in the same window. Scoring each paragraph on its
+    own preserves that separation. Over-long paragraphs (rare in docs) are hard-split so
+    GLiNER's internal truncation never silently drops the tail."""
+    parts = []
+    pos = 0
+    for para in text.split("\n\n"):
+        stripped = para.strip()
+        # skip non-prose blocks: markdown headings, fenced code, tables, list-only markup
+        if stripped and not (stripped[0] == "#" or stripped.startswith("```") or stripped[0] == "|"):
+            base = pos + para.index(stripped[0])
+            if len(stripped) <= size:
+                parts.append((base, stripped))
+            else:
+                for i in range(0, len(stripped), size):
+                    parts.append((base + i, stripped[i:i + size]))
+        pos += len(para) + 2
+    return parts or [(0, text)]
 
 
 def do_spans(req):
     model = get_gliner()
-    labels = req.get("labels") or ["marketing buzzword", "hedge", "filler phrase", "cliche", "vague jargon"]
-    thr = float(req.get("threshold", 0.3))
-    ents = model.predict_entities(req["text"], labels, threshold=thr)
-    spans = [{"text": e["text"], "label": e["label"], "score": round(float(e["score"]), 4),
-              "start": e["start"], "end": e["end"]} for e in ents]
+    labels = req.get("labels") or SLOP_LABELS
+    thr = float(req.get("threshold", 0.15))
+    spans = []
+    for off, chunk in _chunks(req["text"]):
+        for e in model.predict_entities(chunk, labels, threshold=thr):
+            spans.append({"text": e["text"], "label": e["label"], "score": round(float(e["score"]), 4),
+                          "start": off + e["start"], "end": off + e["end"]})
     spans.sort(key=lambda s: -s["score"])
     return {"spans": spans}
 
@@ -179,7 +259,7 @@ def do_decompose(req):
         msgs.append({"role": "assistant", "content": a})
     msgs.append({"role": "user", "content": sent})
     prompt = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
-    ids = tok(prompt, return_tensors="pt").input_ids
+    ids = tok(prompt, return_tensors="pt").input_ids.to(_device())
     with torch.no_grad():
         out = model.generate(
             ids, max_new_tokens=192, do_sample=False, num_beams=1,
@@ -203,7 +283,7 @@ def do_lookback(req):
                    return_offsets_mapping=True, truncation=True, max_length=1024)
     cand_ids = cand_enc.input_ids
     offsets = cand_enc["offset_mapping"][0].tolist()
-    input_ids = torch.cat([ctx_ids, sep_ids, cand_ids], dim=1)
+    input_ids = torch.cat([ctx_ids, sep_ids, cand_ids], dim=1).to(_device())
     n_ctx = ctx_ids.shape[1] + sep_ids.shape[1]
     n_cand = cand_ids.shape[1]
 
@@ -254,7 +334,11 @@ def main():
                 resp = {"ok": True, "models": {"nli": NLI_MODEL, "ppl": PPL_MODEL, "gliner": GLINER_MODEL,
                                                "decomp": DECOMP_MODEL, "lookback": LOOKBACK_MODEL}}
             elif task in HANDLERS:
+                t0 = time.time()
                 resp = HANDLERS[task](req)
+                dt = time.time() - t0
+                if dt > 0.5:
+                    log(f"[mari-ml] {task}: {dt:.1f}s")
             else:
                 resp = {"error": f"unknown task: {task}"}
         except Exception as e:  # never die on one bad request

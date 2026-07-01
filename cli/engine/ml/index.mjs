@@ -2,8 +2,8 @@
 // gliner). No stubs: every call here drives an actual model running in ml/mari_ml.py.
 //
 //   • NLI       — cross-encoder/nli-deberta-v3-xsmall : sentence-pair entailment (grounding T3)
-//   • LM/ppl    — Qwen/Qwen3-0.6B                     : token perplexity → machine-likelihood
-//   • GLiNER    — urchade/gliner_small-v2.1           : zero-shot slop-span extraction
+//   • LM/ppl    — Qwen/Qwen3.5-0.8B                   : token perplexity → machine-likelihood
+//   • GLiNER    — urchade/gliner_multi-v2.1           : zero-shot slop-span extraction
 //
 // The sidecar is a long-lived child process spoken to over JSON lines, so models load once.
 // Models are opt-in (MARI_MODELS=1 / CLI --models): the deterministic core and the editor hook
@@ -51,7 +51,7 @@ export function capabilities() {
     python: pythonPath(),
     available: !!pythonPath() && existsSync(SCRIPT),
     runtime: 'python sidecar (torch/transformers/gliner)',
-    models: { nli: 'cross-encoder/nli-deberta-v3-xsmall', ppl: process.env.MARI_PPL_MODEL || 'Qwen/Qwen3-0.6B', gliner: 'urchade/gliner_small-v2.1',
+    models: { nli: 'cross-encoder/nli-deberta-v3-xsmall', ppl: process.env.MARI_PPL_MODEL || 'Qwen/Qwen3.5-0.8B', gliner: process.env.MARI_GLINER_MODEL || 'urchade/gliner_multi-v2.1',
       decomp: process.env.MARI_DECOMP_MODEL || 'Qwen/Qwen2.5-0.5B-Instruct', lookback: process.env.MARI_LOOKBACK_MODEL || 'Qwen/Qwen3-0.6B' },
   };
 }
@@ -140,9 +140,11 @@ export async function machineScore(text) {
 }
 
 // GLiNER slop spans — returns [{text,label,score,start,end}]. Real model; may be empty.
-// Zero-shot GLiNER on abstract slop labels is low-confidence (~0.2), so we keep the threshold
-// low and let the caller boost spans that overlap a deterministic hit (PITCH §17).
-export async function slopSpans(text, labels, threshold = 0.15) {
+// GLiNER slop-span confidence gate. gliner_multi on concrete slop labels scores real buzzwords
+// ~0.2-0.35 and tops out around ~0.12 on clean technical prose, so 0.15 is the separation point.
+// (Override with MARI_SLOP_THRESHOLD; the sidecar also pre-filters at this level.)
+export const SLOP_THRESHOLD = Number(process.env.MARI_SLOP_THRESHOLD) || 0.15;
+export async function slopSpans(text, labels, threshold = SLOP_THRESHOLD) {
   const r = await request({ task: 'spans', text, labels, threshold });
   return r.spans || [];
 }
@@ -155,7 +157,10 @@ export async function mlSlopFindings(text, deterministic, locate) {
   const covered = deterministic.filter((f) => f.family === 'ai-slop').map((f) => [f.offset, f.offset + (f.length || 0)]);
   const out = [];
   for (const s of spans.slice(0, 12)) {
-    if (s.score < 0.18) continue;
+    if (s.score < SLOP_THRESHOLD) continue;
+    // GLiNER's value here is multi-word paraphrased slop the single-token wordlists miss
+    // ("our offering", "next-generation architecture"); lone words are noise or already covered.
+    if (!/\s/.test(s.text.trim())) continue;
     const overlaps = covered.some(([a, b]) => s.start < b && s.end > a);
     if (overlaps) continue; // already caught deterministically; boost is implicit
     const { line, col } = locate(s.start);
