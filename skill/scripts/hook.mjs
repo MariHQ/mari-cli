@@ -10,7 +10,7 @@
 //
 // CONTRACT: never break the turn. Every path exits 0; on any failure we emit nothing.
 
-import { readStdin, editedFile, targetFile, lint, renderForAgent, i18nNote, rulesNotice, safe } from './hook-lib.mjs';
+import { readStdin, editedFile, targetFile, lint, renderForAgent, i18nNote, rulesNotice, assocNotice, safe } from './hook-lib.mjs';
 
 const QUIET_DEFAULT = true;
 const PROVIDER = (process.argv.find((a) => a.startsWith('--provider='))?.split('=')[1]
@@ -47,6 +47,10 @@ const PROVIDER = (process.argv.find((a) => a.startsWith('--provider='))?.split('
     // (2) Edit rules — any edited file (source, config, etc.).
     const notice = await safeAsync(() => rulesNotice(fp, cwd));
     if (notice) parts.push(notice);
+
+    // (3) Derived code<->doc associations — remind the agent to check the linked counterpart.
+    const assoc = await safeAsync(() => assocNotice(fp, cwd));
+    if (assoc) parts.push(assoc);
 
     if (parts.length) emit(parts.join('\n\n'));
     done();

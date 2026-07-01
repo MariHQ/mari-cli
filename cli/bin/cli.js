@@ -7,7 +7,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { join, dirname, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../engine/config.mjs';
 import { addIgnore, setIgnoreReason, setHookEnabled, resetConfig, addRule, removeRule } from '../engine/config-write.mjs';
@@ -16,7 +16,9 @@ import { extname } from 'node:path';
 import { renderHuman, renderJSON, renderSummary, summarize } from '../engine/findings.mjs';
 import { parseFacts, factcheck, factcheckNLI, factcheckDecomposed, factcheckLookback, sortFindings } from '../engine/grounding.mjs';
 import { scoreDocument, renderScore } from '../engine/score.mjs';
-import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, decomposeClaims, lookbackGrounding, mlSlopFindings } from '../engine/ml/index.mjs';
+import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, decomposeClaims, lookbackGrounding, mlSlopFindings, embed } from '../engine/ml/index.mjs';
+import { buildAssoc, loadAssoc, saveAssoc, loadVectorCache, associationsForFile } from '../engine/assoc.mjs';
+import { tmpdir } from 'node:os';
 import { segment } from '../engine/segment.mjs';
 import * as LEX from '../engine/lexicons.mjs';
 import { detectAssetType, validateAsset, scaffold, ASSET_TYPES } from '../engine/assets.mjs';
@@ -68,6 +70,7 @@ async function main() {
     case 'platform':
     case 'platforms': return platform();
     case 'i18n': return i18n();
+    case 'assoc': return await assocCmd();
     case 'live': return live();
     case undefined:
     case '--help':
@@ -843,6 +846,78 @@ function printCoverageUnder(srcAbs, transRel, srcText, thr) {
   }
 }
 
+// ─── mari assoc — generic semantic association across the repo ────────────────────────────────
+// Everything is embeddings: chunk every file, embed uniformly, shortlist candidate chunk pairs by
+// nearest-neighbor, then ATTENTION decides the semantic association. Any file ↔ any file.
+// attnFn(a, b) → { associated, score }: does attention connect these two chunks, how strongly?
+function attnAssociate(textA, textB) {
+  try {
+    const dir = join(tmpdir(), 'mari-assoc'); mkdirSync(dir, { recursive: true });
+    const cf = join(dir, 'a.txt'), qf = join(dir, 'b.txt');
+    writeFileSync(cf, textA); writeFileSync(qf, textB);
+    const res = runMariAttn(cf, qf, { grounding: true, threshold: 0.3, querySegment: 'paragraph' });
+    if (res.error) return { associated: false, score: 0 };
+    const flagged = res.out.flagged || [];
+    // grounding flags query rows that ignore the context; few flagged ⇒ the two chunks engage.
+    return { associated: flagged.length === 0, score: flagged.length === 0 ? 1 : 0.5 };
+  } catch { return { associated: false, score: 0 }; }
+}
+
+const ASSOC_USAGE = 'Usage: mari assoc build [--attn] | list [file] [--json] | check <file>';
+async function assocCmd() {
+  const p = positionals();
+  const sub = p[0];
+  const root = process.cwd();
+
+  if (sub === 'build') {
+    if (!capabilities().available) { console.error('mari assoc needs the ML sidecar for embeddings (create .venv, install ml/requirements.txt, or set MARI_PYTHON).'); process.exit(2); }
+    const useAttn = flag('attn');
+    let attnFn = null;
+    if (useAttn) {
+      if (!attnReady()) { console.error('--attn needs the native attention binary + a GGUF model (see native/attn/README.md, or set MARI_ATTN_MODEL).'); process.exit(2); }
+      console.error(`(association via attention model ${attnModel().split('/').pop()} — slow)`);
+      attnFn = attnAssociate;
+    }
+    console.error(`(embedding with ${capabilities().models.embed} — first run downloads the model…)`);
+    const embedFn = (texts) => embed(texts);
+    const vectorCache = loadVectorCache(root);
+    const { index, stats } = await buildAssoc(root, { embedFn, attnFn, vectorCache, onProgress: (m) => console.error(`  · ${m}`) });
+    index.builtAt = new Date().toISOString();
+    saveAssoc(root, index, vectorCache);
+    console.log(`✓ .mari/assoc/index.json — ${stats.associations} associations (via ${index.via}) from ${stats.chunks} chunks across ${stats.files} files.`);
+    return;
+  }
+
+  if (sub === 'list' || sub === 'check') {
+    const index = loadAssoc(root);
+    if (!index) { console.error('No association index yet. Run `mari assoc build` first.'); process.exit(2); }
+    const target = p[1];
+    if (sub === 'check' && !target) { console.error('Usage: mari assoc check <file>'); process.exit(2); }
+    const assocs = target ? associationsForFile(index, relative(root, target) || target) : index.associations;
+    if (flag('json')) { console.log(JSON.stringify(target ? assocs : index, null, 2)); return; }
+    if (!assocs.length) { console.log(target ? `No associations touch ${target}.` : 'No associations. Run `mari assoc build`.'); return; }
+
+    if (sub === 'check') {
+      const rel = toPosix(relative(root, target) || target);
+      console.log(`\`${rel}\` is semantically associated with:`);
+      const seen = new Set();
+      for (const a of assocs) {
+        const k = a.b.file + '|' + a.b.span; if (seen.has(k)) continue; seen.add(k);
+        console.log(`  → ${a.b.file} L${a.b.lines[0]}-${a.b.lines[1]}  (${a.via}, ${a.score})  [your L${a.a.lines[0]}-${a.a.lines[1]}]`);
+        if (seen.size >= 15) break;
+      }
+      return;
+    }
+    console.log(`${assocs.length} association(s):`);
+    for (const a of assocs.slice(0, 60)) console.log(`  ${a.a.file} L${a.a.lines[0]}-${a.a.lines[1]}  ↔  ${a.b.file} L${a.b.lines[0]}-${a.b.lines[1]}  (${a.via}, ${a.score})`);
+    if (assocs.length > 60) console.log(`  … and ${assocs.length - 60} more (use --json).`);
+    return;
+  }
+
+  console.error(ASSOC_USAGE); process.exit(2);
+}
+const toPosix = (p) => String(p).split(sep).join('/');
+
 // `mari i18n coverage` — coverage mode with the SOURCE as context and the TRANSLATION as query.
 function i18nCoverageCmd() {
   const srcF = positionals()[1], transArg = positionals()[2];
@@ -1013,6 +1088,7 @@ Usage:
   mari platform detect | list | scaffold <name> [--name "<title>"] [--force]   Set up a docs-as-code site generator (MkDocs, Docusaurus, Sphinx, …) if none exists
   mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)
+  mari assoc build [--attn] | list [file] | check <file>   Generic semantic association across all files (embeddings + nearest-neighbor); --attn uses attention for the association step
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut

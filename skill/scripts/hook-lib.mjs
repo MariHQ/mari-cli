@@ -9,6 +9,7 @@ const ENGINE = new URL('../../cli/engine/index.mjs', import.meta.url);
 const CONFIG = new URL('../../cli/engine/config.mjs', import.meta.url);
 const I18N = new URL('../../cli/engine/i18n.mjs', import.meta.url);
 const GRAMMAR = new URL('../../cli/engine/grammar.mjs', import.meta.url);
+const ASSOC = new URL('../../cli/engine/assoc.mjs', import.meta.url);
 
 // Optional grammar + mechanics pass (Harper WASM). Off unless hook.grammar / detector.grammar is
 // set. Opt-in because it loads an ~18 MB WASM blob; the deterministic path never touches it.
@@ -84,6 +85,40 @@ export async function rulesNotice(fp, cwd) {
     if (!matched.length) return null;
     const lines = matched.map((r) => `  • [${r.name || 'rule'}] ${r.notify}`).join('\n');
     return `🔔 Mari — \`${rel}\` was edited:\n${lines}`;
+  } catch { return null; }
+}
+
+// Derived code<->doc associations (from `mari assoc build`, stored in .mari/assoc/). When an
+// edited file is one side of an association, remind the agent to check the counterpart — and
+// include a short snippet so it can decide without opening the file. Deterministic; no models.
+function snippet(cwd, file, lines) {
+  try {
+    const body = readFileSync(new URL('file://' + (file.startsWith('/') ? file : `${cwd}/${file}`)), 'utf8');
+    const all = body.split('\n');
+    const from = Math.max(0, (lines?.[0] || 1) - 1);
+    return all.slice(from, from + 5).join('\n').trim().slice(0, 400);
+  } catch { return null; }
+}
+export async function assocNotice(fp, cwd) {
+  try {
+    const { loadAssoc, associationsForFile } = await import(ASSOC);
+    const { loadConfig } = await import(CONFIG);
+    const config = safe(() => loadConfig(cwd), null);
+    if (config?.hook?.enabled === false || config?.hook?.assoc === false) return null;
+    const index = safe(() => loadAssoc(cwd), null);
+    if (!index?.associations?.length) return null;
+    const rel = relative(cwd, fp) || fp;
+    const hits = associationsForFile(index, rel); // normalized: edited file is `a`, counterpart is `b`
+    if (!hits.length) return null;
+
+    const seen = new Set(); const lines = [];
+    for (const a of hits) {
+      const key = a.b.file + '|' + a.b.span; if (seen.has(key)) continue; seen.add(key);
+      const snip = snippet(cwd, a.b.file, a.b.lines);
+      lines.push(`  • ${a.b.file} L${a.b.lines[0]}-${a.b.lines[1]} (${a.via}, ${a.score})${snip ? `\n      ${snip.split('\n').join('\n      ')}` : ''}`);
+      if (lines.length >= 6) break;
+    }
+    return `🔗 Mari — \`${rel}\` was edited; semantically associated spans elsewhere — check if they need updating:\n${lines.join('\n')}`;
   } catch { return null; }
 }
 

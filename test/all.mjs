@@ -18,6 +18,7 @@ const SUITES = [
   'assets.mjs',
   'i18n.mjs',
   'platforms.mjs',
+  'assoc.mjs',
 ];
 
 const results = [];
