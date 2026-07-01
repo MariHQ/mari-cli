@@ -115,9 +115,16 @@ async function detect() {
   // separate domain noun-phrases ("failure recovery") from marketing slop ("our offering") —
   // they score in the same band — so it's noisy on technical docs and off by the default path.
   const wantSlopSpans = flag('slop-spans') || ['1', 'true', 'on'].includes(process.env.MARI_SLOP_SPANS || '');
-  if (useModels) {
-    console.error(wantSlopSpans ? '(loading models — Qwen perplexity + GLiNER spans…)' : '(loading models — Qwen perplexity…)');
-    await warmup();
+  // What the model tier actually feeds: perplexity → the machine-likelihood score (only rendered
+  // with --json/--score), GLiNER → slop spans (only with --slop-spans). Warm nothing else — each
+  // model is ~0.5-2 GB to load, so touching an unused one is what made --models look hung.
+  const needPpl = wantScore || asJson;
+  if (useModels && !needPpl && !wantSlopSpans) {
+    console.error('(--models adds a machine-likelihood score and needs --json or --score to show it; add --slop-spans for GLiNER spans. Nothing to compute here — skipping model load.)');
+  } else if (useModels) {
+    const parts = [needPpl && 'Qwen perplexity', wantSlopSpans && 'GLiNER spans'].filter(Boolean);
+    console.error(`(loading models — ${parts.join(' + ')}…)`);
+    await warmup({ ppl: needPpl, spans: wantSlopSpans });
     if (wantSlopSpans) {
       for (const r of results) {
         if (!r.text) continue;
@@ -501,7 +508,7 @@ async function runFactcheck() {
     }
   } else if (useModels) {
     console.error('(loading NLI model for entailment checking…)');
-    await warmup();
+    await warmup({ nli: true });
     findings = await factcheckNLI(docText, facts, { sourceMode, nli: nliEntail });
   } else {
     findings = factcheck(docText, facts, { sourceMode });

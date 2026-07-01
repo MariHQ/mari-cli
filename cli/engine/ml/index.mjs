@@ -85,14 +85,16 @@ function request(payload) {
   });
 }
 
-export async function warmup() {
+// Front-load only the models the caller will actually use. Each model is ~0.5-2 GB to load
+// (and downloads on first ever use), so touching all three when the run needs one is the
+// difference between "instant" and "looks hung". Defaults to none — pass what you need.
+export async function warmup({ ppl = false, nli = false, spans = false } = {}) {
   await request({ task: 'ping' });
-  // touch each model so first real call isn't slow
-  await Promise.all([
-    request({ task: 'nli', premise: 'a', hypothesis: 'a' }).catch(() => {}),
-    request({ task: 'perplexity', text: 'warm up the model' }).catch(() => {}),
-    request({ task: 'spans', text: 'warm up the model', labels: ['x'] }).catch(() => {}),
-  ]);
+  const jobs = [];
+  if (nli) jobs.push(request({ task: 'nli', premise: 'a', hypothesis: 'a' }).catch(() => {}));
+  if (ppl) jobs.push(request({ task: 'perplexity', text: 'warm up the model' }).catch(() => {}));
+  if (spans) jobs.push(request({ task: 'spans', text: 'warm up the model', labels: ['x'] }).catch(() => {}));
+  await Promise.all(jobs);
 }
 
 export function shutdown() { if (_proc) { try { _proc.stdin.end(); } catch {} _proc = null; } }

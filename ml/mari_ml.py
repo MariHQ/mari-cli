@@ -74,67 +74,67 @@ def _lm_dtype():
     return torch.float16 if _device() in ("mps", "cuda") else torch.float32
 
 
+def _cached(key, loader):
+    """Load a model once and reuse it. Crucially, a FAILED load is cached too: an unloadable
+    model (unrecognized architecture, missing weights) otherwise re-attempts its multi-second
+    load on every request, which reads as a hang. Cache the exception → fast, clear repeat error."""
+    if key in _state:
+        v = _state[key]
+        if isinstance(v, Exception):
+            raise v
+        return v
+    try:
+        v = loader()
+    except Exception as e:
+        _state[key] = e
+        raise
+    _state[key] = v
+    return v
+
+
+def _load_causal(model_id, eager=False):
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    log(f"[mari-ml] loading LM {model_id} (first run downloads weights) ...")
+    tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    kw = {"torch_dtype": _lm_dtype(), "trust_remote_code": True}
+    if eager:
+        kw["attn_implementation"] = "eager"
+    model = AutoModelForCausalLM.from_pretrained(model_id, **kw)
+    model.eval()
+    model.to(_device())
+    return (tok, model)
+
+
 def get_nli():
-    if "nli" not in _state:
+    def _load():
         from transformers import AutoTokenizer, AutoModelForSequenceClassification
         log(f"[mari-ml] loading NLI {NLI_MODEL} ...")
         tok = AutoTokenizer.from_pretrained(NLI_MODEL)
         model = AutoModelForSequenceClassification.from_pretrained(NLI_MODEL)
         model.eval()
         model.to(_device())
-        _state["nli"] = (tok, model, model.config.id2label)
-    return _state["nli"]
+        return (tok, model, model.config.id2label)
+    return _cached("nli", _load)
 
 
 def get_lm():
-    if "lm" not in _state:
-        from transformers import AutoTokenizer, AutoModelForCausalLM
-        torch = _torch()
-        log(f"[mari-ml] loading LM {PPL_MODEL} (first run downloads weights) ...")
-        tok = AutoTokenizer.from_pretrained(PPL_MODEL, trust_remote_code=True)
-        model = AutoModelForCausalLM.from_pretrained(
-            PPL_MODEL, torch_dtype=_lm_dtype(), trust_remote_code=True)
-        model.eval()
-        model.to(_device())
-        _state["lm"] = (tok, model)
-    return _state["lm"]
+    return _cached("lm", lambda: _load_causal(PPL_MODEL))
 
 
 def get_gliner():
-    if "gliner" not in _state:
+    def _load():
         from gliner import GLiNER
         log(f"[mari-ml] loading GLiNER {GLINER_MODEL} ...")
-        _state["gliner"] = GLiNER.from_pretrained(GLINER_MODEL)
-    return _state["gliner"]
+        return GLiNER.from_pretrained(GLINER_MODEL)
+    return _cached("gliner", _load)
 
 
 def get_decomp():
-    if "decomp" not in _state:
-        from transformers import AutoTokenizer, AutoModelForCausalLM
-        torch = _torch()
-        log(f"[mari-ml] loading decomposer {DECOMP_MODEL} (first run downloads weights) ...")
-        tok = AutoTokenizer.from_pretrained(DECOMP_MODEL, trust_remote_code=True)
-        model = AutoModelForCausalLM.from_pretrained(
-            DECOMP_MODEL, torch_dtype=_lm_dtype(), trust_remote_code=True)
-        model.eval()
-        model.to(_device())
-        _state["decomp"] = (tok, model)
-    return _state["decomp"]
+    return _cached("decomp", lambda: _load_causal(DECOMP_MODEL))
 
 
 def get_lookback():
-    if "lookback" not in _state:
-        from transformers import AutoTokenizer, AutoModelForCausalLM
-        torch = _torch()
-        log(f"[mari-ml] loading lookback LM {LOOKBACK_MODEL} (eager attn) ...")
-        tok = AutoTokenizer.from_pretrained(LOOKBACK_MODEL, trust_remote_code=True)
-        model = AutoModelForCausalLM.from_pretrained(
-            LOOKBACK_MODEL, torch_dtype=_lm_dtype(),
-            attn_implementation="eager", trust_remote_code=True)
-        model.eval()
-        model.to(_device())
-        _state["lookback"] = (tok, model)
-    return _state["lookback"]
+    return _cached("lookback", lambda: _load_causal(LOOKBACK_MODEL, eager=True))
 
 
 def do_nli(req):

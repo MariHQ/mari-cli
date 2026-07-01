@@ -1,7 +1,9 @@
-# Pinned to a coherent set: gliner 0.2.x is built on transformers 4.x, so transformers
-# stays <5 (the v4 API is what mari_ml.py uses, e.g. torch_dtype=).
-torch>=2.2,<3
-transformers>=4.40,<5
+# transformers must be new enough to recognize the default perplexity model's architecture
+# (Qwen3.5 → needs transformers 5.x). gliner 0.2.x declares an upper bound of <5.7 but runs
+# fine on current 5.x at import + predict time; install it with --no-deps if pip's resolver
+# balks, or override the models with MARI_PPL_MODEL / MARI_GLINER_MODEL to stay on 4.x.
+torch>=2.2
+transformers>=5.12
 gliner>=0.2.13,<0.3
 sentencepiece>=0.2
 protobuf>=4
