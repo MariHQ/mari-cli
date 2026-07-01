@@ -1,8 +1,9 @@
 {
+  "version": 1,
   "hooks": {
-    "beforeEdit": [
+    "afterFileEdit": [
       {
-        "command": "node skill/scripts/hook-before-edit.mjs"
+        "command": "node skill/scripts/hook.mjs --provider=cursor"
       }
     ]
   }

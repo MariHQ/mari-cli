@@ -27,6 +27,11 @@ check('backslash paths are normalized', idsOf(['docs\\conf.py']).includes('sphin
 check('a plain repo detects nothing', detectPlatforms(['README.md', 'src/index.js', 'package.json']).length === 0);
 check('a stray conf.py outside docs is not sphinx', !idsOf(['src/conf.py']).includes('sphinx'));
 check('a random book.json at root is gitbook, not mdbook', idsOf(['book.json']).includes('gitbook') && !idsOf(['book.json']).includes('mdbook'));
+// C17: weak signature files need corroboration
+check('docs/.nojekyll alone is not docsify', !idsOf(['docs/.nojekyll']).includes('docsify'));
+check('docs/_sidebar.md is docsify', idsOf(['docs/_sidebar.md']).includes('docsify'));
+check('astro.config alone is not starlight', !idsOf(['astro.config.mjs']).includes('starlight'));
+check('astro.config + src/content/docs/ is starlight', idsOf(['astro.config.mjs', 'src/content/docs/index.md']).includes('starlight'));
 
 // --- scaffold shape ---
 check('scaffoldablePlatforms all have a files() factory', scaffoldablePlatforms().every((p) => typeof p.files === 'function'));

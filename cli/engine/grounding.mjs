@@ -15,6 +15,10 @@ const STOP = new Set(('a an the and or but of to in on at by for with from as is
   'also more most some any all each every other another which who whom whose what when where why how').split(' '));
 
 const MONTHS = 'january|february|march|april|may|june|july|august|september|october|november|december';
+const MONTH_NUM = Object.fromEntries(MONTHS.split('|').map((m, i) => [m, i + 1]));
+// Canonical date form: ISO. `YYYY-MM-DD` for full dates, `YYYY-MM` for month+year only, so the
+// same date written as "2024-03-15" and "March 15, 2024" always compares equal.
+const isoDate = (y, mo, d) => `${y}-${String(mo).padStart(2, '0')}${d ? '-' + String(d).padStart(2, '0') : ''}`;
 
 export function contentTokens(s) {
   return (s.toLowerCase().match(/[a-z][a-z'-]{2,}/g) || []).filter((w) => !STOP.has(w));
@@ -22,40 +26,60 @@ export function contentTokens(s) {
 
 export function entities(s) {
   const out = new Set();
-  // Capitalized word sequences (skip a lone sentence-initial capital by requiring 2+ words OR an acronym/number-bearing token)
+  // Capitalized word sequences. A LONE sentence-initial capitalized word is just the start of a
+  // sentence ("The", "This"), not an entity — skip it unless it's an acronym or carries a digit.
   let m; const re = /\b([A-Z][A-Za-z0-9]+(?:\s+(?:[A-Z][A-Za-z0-9]+|of|the|and))*)\b/g;
-  while ((m = re.exec(s))) { const e = m[1].trim().toLowerCase(); if (e.length > 2) out.add(e); }
+  while ((m = re.exec(s))) {
+    const e = m[1].trim();
+    if (!/\s/.test(e) && !/[0-9]/.test(e) && !/^[A-Z]{2,}$/.test(e)) {
+      const before = s.slice(0, m.index);
+      if (/^\s*$/.test(before) || /[.!?:;]\s*$/.test(before) || /\n\s*$/.test(before)) continue;
+    }
+    const el = e.toLowerCase();
+    if (el.length > 2) out.add(el);
+  }
   // all-caps acronyms
   let a; const ar = /\b[A-Z]{2,6}\b/g;
   while ((a = ar.exec(s))) out.add(a[0].toLowerCase());
   return out;
 }
 
-// Typed numeric/date spans, normalized so we can compare like-for-like.
+// Typed numeric/date spans, normalized so we can compare like-for-like. Spans carry their
+// character offsets; overlap between candidate matches is decided by OFFSET RANGE, not by raw
+// substring containment — so a standalone "5" is kept even when a "50%" appears nearby.
 export function typedSpans(s) {
   const spans = [];
-  const push = (kind, value, raw) => spans.push({ kind, value, raw });
+  const push = (kind, value, raw, start) => spans.push({ kind, value, raw, start, end: start + raw.length });
+  const covered = (start, end) => spans.some((sp) => start < sp.end && end > sp.start);
   let m;
   // percentages
   const pct = /(\d+(?:\.\d+)?)\s?%/g;
-  while ((m = pct.exec(s))) push('percent', parseFloat(m[1]), m[0]);
+  while ((m = pct.exec(s))) push('percent', parseFloat(m[1]), m[0], m.index);
   // money (with optional magnitude word)
   const money = /\$\s?(\d[\d,]*(?:\.\d+)?)\s?(million|billion|thousand|k|m|b)?/gi;
-  while ((m = money.exec(s))) push('money', scaleMoney(m[1], m[2]), m[0]);
-  // ISO date
+  while ((m = money.exec(s))) push('money', scaleMoney(m[1], m[2]), m[0], m.index);
+  // ISO date → canonical ISO
   const iso = /\b(\d{4})-(\d{2})-(\d{2})\b/g;
-  while ((m = iso.exec(s))) push('date', `${m[1]}-${m[2]}-${m[3]}`, m[0]);
-  // Month DD, YYYY  /  Month YYYY
-  const md = new RegExp(`\\b(${MONTHS})\\s+(\\d{1,2})?,?\\s*(\\d{4})\\b`, 'gi');
-  while ((m = md.exec(s))) push('date', `${m[1].toLowerCase()}${m[2] ? ' ' + m[2] : ''} ${m[3]}`, m[0]);
-  // years (standalone), excluding ones already in a money/percent token
+  while ((m = iso.exec(s))) push('date', isoDate(m[1], +m[2], +m[3]), m[0], m.index);
+  // DD Month YYYY → canonical ISO (checked before Month YYYY so "15 March 2024" isn't
+  // half-consumed as a month-year span)
+  const dmy = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTHS})\\s*,?\\s*(\\d{4})\\b`, 'gi');
+  while ((m = dmy.exec(s))) { if (!covered(m.index, m.index + m[0].length)) push('date', isoDate(m[3], MONTH_NUM[m[2].toLowerCase()], +m[1]), m[0], m.index); }
+  // Month DD, YYYY  /  Month YYYY → canonical ISO (YYYY-MM-DD / YYYY-MM)
+  const md = new RegExp(`\\b(${MONTHS})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?\\s*(\\d{4})\\b|\\b(${MONTHS})\\s+(\\d{4})\\b`, 'gi');
+  while ((m = md.exec(s))) {
+    if (covered(m.index, m.index + m[0].length)) continue;
+    if (m[1]) push('date', isoDate(m[3], MONTH_NUM[m[1].toLowerCase()], +m[2]), m[0], m.index);
+    else push('date', isoDate(m[5], MONTH_NUM[m[4].toLowerCase()]), m[0], m.index);
+  }
+  // years (standalone), excluding ones already inside a money/percent/date span
   const yr = /\b(19|20)\d{2}\b/g;
-  while ((m = yr.exec(s))) { if (!spans.some((sp) => sp.raw.includes(m[0]))) push('year', parseInt(m[0], 10), m[0]); }
+  while ((m = yr.exec(s))) { if (!covered(m.index, m.index + m[0].length)) push('year', parseInt(m[0], 10), m[0], m.index); }
   // plain counts (not part of the above)
   const num = /\b\d[\d,]*(?:\.\d+)?\b/g;
   while ((m = num.exec(s))) {
-    if (spans.some((sp) => sp.raw.includes(m[0]))) continue;
-    push('count', parseFloat(m[0].replace(/,/g, '')), m[0]);
+    if (covered(m.index, m.index + m[0].length)) continue;
+    push('count', parseFloat(m[0].replace(/,/g, '')), m[0], m.index);
   }
   return spans;
 }
@@ -100,14 +124,19 @@ function relevance(claimTokens, claimEnts, fact) {
   return { score: shared + 2 * sharedEnt, sharedTokens: shared };
 }
 
+// Two canonical dates agree when equal, or when one is a coarser truncation of the other
+// ("2024-03" is compatible with "2024-03-15" — different granularity, not a contradiction).
+const datesCompatible = (a, b) => a === b || a.startsWith(b + '-') || b.startsWith(a + '-');
+
 // Compare typed spans by kind; a shared kind with disjoint value sets is a mismatch.
 function findMismatch(claimSpans, factSpans) {
   for (const kind of new Set(claimSpans.map((s) => s.kind))) {
     const cv = claimSpans.filter((s) => s.kind === kind);
     const fv = factSpans.filter((s) => s.kind === kind);
     if (!fv.length) continue;
-    const fvals = new Set(fv.map((s) => String(s.value)));
-    const overlap = cv.some((s) => fvals.has(String(s.value)));
+    const overlap = kind === 'date'
+      ? cv.some((c) => fv.some((f) => datesCompatible(String(c.value), String(f.value))))
+      : cv.some((c) => fv.some((f) => String(c.value) === String(f.value)));
     if (!overlap) return { kind, claim: cv[0], fact: fv[0] };
   }
   return null;
@@ -124,7 +153,7 @@ export function retrieve(cTokens, cEnts, facts) {
 }
 
 const SEV_RANK = { error: 0, warn: 1, advisory: 2 };
-export const sortFindings = (fs) => fs.sort((a, b) => (SEV_RANK[a.severity] - SEV_RANK[b.severity]) || a.line - b.line);
+export const sortFindings = (fs) => [...fs].sort((a, b) => (SEV_RANK[a.severity] - SEV_RANK[b.severity]) || a.line - b.line);
 
 // Tier 0 (sync, deterministic): typed-span mismatch + unsupported checkable claims.
 export function factcheck(docText, facts, { sourceMode = false } = {}) {

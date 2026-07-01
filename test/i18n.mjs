@@ -40,6 +40,12 @@ check('dir: finds fr sibling', locs(dr).includes('fr'));
 // ordinary file → nothing
 check('plain file with no siblings → null', assoc('suffix/README.es.md') !== null && i18nAssociations(join(ROOT, 'docu/docs/intro.md'), ROOT, { i18n: { enabled: false } }) === null);
 
+// C10: a root that is a mere name-prefix sibling (…/suff vs …/suffix) must not be treated as
+// containing the file; association falls back to the file's own location and still works.
+const sib = i18nAssociations(join(ROOT, 'suffix/README.md'), join(ROOT, 'suff'), {});
+check('sibling-dir root: still finds the es sibling', locs(sib).includes('es'), `(${JSON.stringify(sib && sib.siblings)})`);
+check('sibling-dir root: no bogus prefix-relative paths', !sib || sib.siblings.every((s) => !s.rel.startsWith('ix/')));
+
 // custom mirror via config: source "hugo/content" ↔ "hugo/content.{locale}"
 const mir = assoc('hugo/content/docs/guide.md', { i18n: { layouts: [], mirrors: [{ source: 'hugo/content', translation: 'hugo/content.{locale}' }] } });
 check('custom mirror finds the zh sibling', mir && mir.layout === 'mirror' && mir.siblings.some((s) => /content\.zh/.test(s.rel)), `(${mir && mir.layout})`);

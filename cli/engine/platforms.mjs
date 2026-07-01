@@ -88,8 +88,9 @@ export const PLATFORMS = [
     lang: 'None — static, served as-is',
     site: 'https://docsify.js.org',
     build: 'npx docsify-cli serve docs',
-    // Docsify has no config file; its tell is a docs/index.html that loads docsify.
-    detect: [/^docs\/\.nojekyll$/i, /^docs\/_sidebar\.md$/i],
+    // Docsify has no config file; its tell is the docs/_sidebar.md nav. A bare docs/.nojekyll is
+    // NOT a signal — that's a generic GitHub Pages marker any static setup may carry.
+    detect: [/^docs\/_sidebar\.md$/i],
     files: docsifyFiles,
   },
   // Detected-but-not-scaffolded: recognized so we don't double-provision, but we don't generate
@@ -106,7 +107,10 @@ export const PLATFORMS = [
     label: 'Astro Starlight',
     lang: 'Node.js',
     site: 'https://starlight.astro.build',
+    // An astro.config alone is just an Astro site; Starlight additionally keeps its docs under
+    // src/content/docs/. Both signals must be present (see `requiresAll`).
     detect: [/^astro\.config\.(mjs|js|ts)$/i],
+    requiresAll: [/^src\/content\/docs\//i],
   },
   {
     id: 'gitbook',
@@ -138,7 +142,11 @@ export function detectPlatforms(paths) {
   const out = [];
   for (const p of PLATFORMS) {
     const matched = norm.filter((path) => p.detect.some((re) => re.test(path)));
-    if (matched.length) out.push({ id: p.id, label: p.label, matched });
+    if (!matched.length) continue;
+    // `requiresAll`: every listed pattern must also match SOME path (conjunctive corroboration
+    // for weak signature files, e.g. Starlight = astro.config + src/content/docs/).
+    if (p.requiresAll && !p.requiresAll.every((re) => norm.some((path) => re.test(path)))) continue;
+    out.push({ id: p.id, label: p.label, matched });
   }
   return out;
 }

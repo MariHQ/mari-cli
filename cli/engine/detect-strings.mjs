@@ -10,7 +10,7 @@
 
 const LANGS = {
   // open/close are single chars; `triples` are matched before single quotes (Python docstrings).
-  js: { line: '//', block: ['/*', '*/'], quotes: ['"', "'", '`'], triples: [] },
+  js: { line: '//', block: ['/*', '*/'], quotes: ['"', "'", '`'], triples: [], regex: true },
   py: { line: '#', block: null, quotes: ['"', "'"], triples: ['"""', "'''"] },
 };
 
@@ -37,6 +37,37 @@ export function isCodeFile(ext) { return ext in EXT_LANG || CODE_EXT.has(ext); }
 // comments matching these markers are dropped, not linted. Applied to COMMENTS only — a
 // docstring that happens to mention "license" is real text and stays.
 const LICENSE_RE = /\blicen[sc]ed?\b|\bcopyright\b|\ball rights reserved\b|warranties or conditions|as is\b|spdx-license|apache\.org\/licenses|governing permissions/i;
+
+// Conservative "can a regex literal start here?" heuristic (JS): a `/` opens a regex when the
+// previous significant char is an operator / opener / separator or a keyword that expects an
+// expression; after an identifier, number, `)` or `]` it's division. Ambiguity resolves toward
+// "regex" only on these explicit signals, keeping the invariant that code we can't classify is
+// masked, never linted as prose.
+const REGEX_PREV_CHARS = new Set('(=:,[!&|?{};+-*%<>~^\n'.split(''));
+const REGEX_PREV_KEYWORDS = /(?:^|[^A-Za-z0-9_$.])(return|typeof|case|in|of|instanceof|new|delete|void|do|else|yield|await)$/;
+function regexCanFollow(text, i) {
+  let k = i - 1;
+  while (k >= 0 && (text[k] === ' ' || text[k] === '\t')) k--;
+  if (k < 0) return true; // start of file
+  if (REGEX_PREV_CHARS.has(text[k])) return true;
+  return REGEX_PREV_KEYWORDS.test(text.slice(Math.max(0, k - 12), k + 1));
+}
+// Given text[i] === '/' opening a regex literal, return the index just past the closing `/`
+// and any flags. Handles escapes and character classes; an unterminated literal ends at EOL.
+function skipRegexLiteral(text, i) {
+  const n = text.length;
+  let j = i + 1, inClass = false;
+  while (j < n) {
+    const c = text[j];
+    if (c === '\\') { j += 2; continue; }
+    if (c === '\n') return j; // not a regex after all / unterminated — stop at the line end
+    if (inClass) { if (c === ']') inClass = false; }
+    else if (c === '[') inClass = true;
+    else if (c === '/') { j++; while (j < n && /[a-z]/i.test(text[j])) j++; return j; }
+    j++;
+  }
+  return j;
+}
 
 export function maskSource(text, lang) {
   const cfg = LANGS[lang];
@@ -80,6 +111,11 @@ export function maskSource(text, lang) {
       }
     }
     if (tri) continue;
+    // regex literal (JS) — masked entirely so a quote inside /["']/ never opens a phantom string
+    if (cfg.regex && ch === '/' && regexCanFollow(text, i)) {
+      i = skipRegexLiteral(text, i);
+      continue;
+    }
     // single/double/backtick string with escape handling
     if (cfg.quotes.includes(ch)) {
       let j = i + 1; const s = j;

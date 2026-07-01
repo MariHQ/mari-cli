@@ -12,7 +12,7 @@
 // Detection only reports translations that ACTUALLY EXIST on disk, so it never invents files.
 
 import { readdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, isAbsolute } from 'node:path';
 import { segment } from './segment.mjs';
 
 // ISO-639 base codes Mari recognizes as locales (mirrors index.mjs, plus the default `en`).
@@ -168,14 +168,19 @@ export function i18nAssociations(absPath, root, config) {
   if (cfg.enabled === false) return null;
   const def = String(cfg.defaultLocale || 'en').toLowerCase();
   const layouts = cfg.layouts || DEFAULT_LAYOUTS;
-  // When root is set and contains the file, use a clean relative path; otherwise resolve against
-  // the file's own absolute location (root stays "").
-  const rel = root && absPath.startsWith(root) ? toPosix(absPath.slice(root.length).replace(/^[/\\]/, '')) : toPosix(absPath);
+  // When root is set and actually contains the file (path.relative — a sibling dir that merely
+  // shares a name prefix does NOT count), use a clean relative path; otherwise resolve against
+  // the file's own absolute location (root becomes "").
+  let rel = toPosix(absPath), effRoot = '';
+  if (root) {
+    const r = relative(root, absPath);
+    if (r && !r.startsWith('..') && !isAbsolute(r)) { rel = toPosix(r); effRoot = root; }
+  }
 
-  for (const m of (cfg.mirrors || [])) { const r = mirror(rel, def, root, m); if (r) return finalize(r, rel); }
+  for (const m of (cfg.mirrors || [])) { const r = mirror(rel, def, effRoot, m); if (r) return finalize(r, rel); }
   for (const name of layouts) {
     const fn = BUILTINS[name]; if (!fn) continue;
-    const r = fn(rel, def, root); if (r) return finalize(r, rel);
+    const r = fn(rel, def, effRoot); if (r) return finalize(r, rel);
   }
   return null;
 }
@@ -187,7 +192,7 @@ export function i18nAssociations(absPath, root, config) {
 
 function fences(text) {
   const out = [];
-  let m; const re = /(^|\n)(```|~~~)[^\n]*\n([\s\S]*?)\n\2/g;
+  let m; const re = /(^|\r?\n)(```|~~~)[^\n]*\r?\n([\s\S]*?)\r?\n\2/g;
   while ((m = re.exec(text))) out.push(m[3].trim());
   return out;
 }

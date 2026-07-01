@@ -1,4 +1,4 @@
 {
   "event": "postEdit",
-  "command": "node skill/scripts/hook.mjs"
+  "command": "node skill/scripts/hook.mjs --provider=copilot"
 }

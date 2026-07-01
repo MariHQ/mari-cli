@@ -70,6 +70,24 @@ const adjacent = [
 ].join('\n');
 check('adjacent string literals do not trip repeated-word', !rules(adjacent, 'py').includes('repeated-word'));
 
+// C9: a quote inside a regex literal must not open a phantom string that leaks code as prose
+const rx = [
+  "const re = /[\"']/;",
+  'if (re.test(x)) { doSomething(unrelatedIdentifierUtilizeLeverage); }',
+  'const label = "Empower your seamless workflow today!";',
+].join('\n');
+const rxFinds = lint(rx, 'js');
+check('JS: quote inside a regex literal does not leak code as prose',
+  rxFinds.every((f) => f.line !== 2));
+check('JS: string after a regex literal is still linted', rxFinds.some((f) => f.ruleId === 'marketing-buzzword' && f.line === 3));
+// regex after return/(/=/, forms
+check('JS: regex after return is masked', !rules('function f() { return /"seamless empower"/.test(x); }', 'js').includes('marketing-buzzword'));
+check('JS: regex in a call argument is masked', !rules('x.replace(/["\']seamless["\']/g, y)', 'js').includes('marketing-buzzword'));
+// division is NOT mistaken for a regex — the string after it still lints correctly
+check('JS: division does not start a regex', rules('const r = a / b; const s = "Empower your seamless workflow!";', 'js').includes('marketing-buzzword'));
+const rxMasked = maskSource(rx, 'js');
+check('JS: regex masking preserves length', rxMasked.length === rx.length);
+
 // masking preserves length and newlines (offsets stay valid)
 const masked = maskSource(py, 'py');
 check('mask preserves length', masked.length === py.length);

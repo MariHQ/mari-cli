@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Hook library tests — payload extraction and the pre-write lint/block decision.
 
-import { proposedEdit, lintContent, targetFile, editedFile, renderForAgent } from '../skill/scripts/hook-lib.mjs';
+import { proposedEdit, lintContent, lintFragments, targetFile, editedFile, renderForAgent } from '../skill/scripts/hook-lib.mjs';
 import { addIgnore, setHookEnabled, resetConfig, addRule, removeRule } from '../cli/engine/config-write.mjs';
 import { matchRules } from '../cli/engine/config.mjs';
 import { detectText } from '../cli/engine/index.mjs';
@@ -73,13 +73,25 @@ const check = (name, cond) => { if (cond) pass++; else { fail++; console.log('  
 }
 
 // editedFile accepts any extension (rules fire on source, not just markdown)
-check('editedFile accepts a non-markdown edit', editedFile({ tool_name: 'Edit', tool_input: { file_path: import.meta.url.replace('file://', '') } }) !== null);
+const selfPath = import.meta.url.replace('file://', '');
+check('editedFile accepts a non-markdown edit', editedFile({ tool_name: 'Edit', tool_input: { file_path: selfPath } }) !== null);
 check('editedFile rejects non-edit tools', editedFile({ tool_name: 'Bash', tool_input: { file_path: '/x.ts' } }) === null);
+
+// editedFile is provider-tolerant (C4): Cursor afterFileEdit and bare-path payload shapes
+check('editedFile accepts a Cursor afterFileEdit shape', editedFile({ file_path: selfPath, edits: [{ old_string: 'a', new_string: 'b' }] }) === selfPath);
+check('editedFile accepts a bare path field (codex-style)', editedFile({ path: selfPath }) === selfPath);
+check('editedFile still rejects a Bash payload with a path', editedFile({ tool_name: 'Bash', path: selfPath }) === null);
+check('editedFile rejects a missing file', editedFile({ file_path: '/no/such/file.md' }) === null);
 
 // proposedEdit tolerates several payload shapes
 check('proposedEdit reads content', proposedEdit({ tool_input: { file_path: 'a.md', content: 'hi' } }).text === 'hi');
 check('proposedEdit reads new_string', proposedEdit({ tool_input: { file_path: 'a.md', new_string: 'yo' } }).text === 'yo');
 check('proposedEdit reads edits[]', proposedEdit({ tool_input: { file_path: 'a.md', edits: [{ new_string: 'x' }, { new_string: 'y' }] } }).text === 'x\ny');
+
+// proposedEdit exposes fragments so MultiEdit snippets are linted separately (C8)
+const pe = proposedEdit({ tool_input: { file_path: 'a.md', edits: [{ new_string: 'x' }, { new_string: 'y' }] } });
+check('proposedEdit exposes fragments', Array.isArray(pe.fragments) && pe.fragments.length === 2 && pe.fragments[1] === 'y');
+check('proposedEdit marks whole-file content', proposedEdit({ tool_input: { file_path: 'a.md', content: 'z' } }).isFullContent === true && pe.isFullContent === false);
 
 // targetFile only accepts prose edit tools
 check('targetFile rejects non-edit tools', targetFile({ tool_name: 'Bash', tool_input: { file_path: '/x.md' } }) === null);
@@ -105,6 +117,35 @@ check('floor setup: raw detect surfaces an advisory', rawAdv.some((f) => f.sever
 const floored = await lintContent(advisoryText, cwd, '.md');
 check('hook floor: advisories suppressed by default', floored.findings.every((f) => f.severity !== 'advisory'));
 check('hook floor: still keeps error/warn', r1.findings.some((f) => f.severity === 'error'));
+
+// C8: fragments lint separately — no fabricated adjacency across MultiEdit snippets, and
+// findings carry a fragment-relative label so line numbers aren't mistaken for file lines.
+const frag = await lintFragments(['# T\n\nAs an AI language model, I can help!', 'The cat sat.'], cwd, '.md');
+check('lintFragments finds slop in a fragment', frag.findings.some((f) => f.severity === 'error'));
+check('lintFragments labels findings fragment-relative', frag.findings.every((f) => /^edit #\d+ L\d+$/.test(f.lineLabel || '')));
+const fragRendered = await renderForAgent('x.md', frag.findings, 10);
+check('rendered output shows the fragment-relative label', /edit #1 L\d+/.test(fragRendered));
+// whole-file content keeps plain file-accurate line numbers
+const whole = await lintFragments(['# T\n\nAs an AI language model, I can help!'], cwd, '.md', { isFullContent: true });
+check('whole-file content has no fragment label', whole.findings.length > 0 && whole.findings.every((f) => !f.lineLabel));
+
+// C4 end-to-end: a cursor-shaped payload run through the hook script produces lint output
+{
+  const { execFileSync } = await import('node:child_process');
+  const { writeFileSync, mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'mari-hook-'));
+  const mdPath = join(dir, 'doc.md');
+  writeFileSync(mdPath, '# T\n\nAs an AI language model, I hope this helps!');
+  const run = (payload, args = []) => execFileSync('node', ['skill/scripts/hook.mjs', ...args], { input: JSON.stringify(payload), cwd: process.cwd(), encoding: 'utf8' });
+  const cursorOut = run({ file_path: mdPath, edits: [{ old_string: '', new_string: 'x' }], workspace_roots: [process.cwd()] }, ['--provider=cursor']);
+  check('cursor payload → cursor-shaped lint output', cursorOut.includes('agentMessage') && cursorOut.includes('Mari'));
+  const codexOut = run({ path: mdPath, cwd: process.cwd() }, ['--provider=codex']);
+  check('codex payload → plain-text lint output', codexOut.includes('Mari') && !codexOut.includes('hookSpecificOutput'));
+  const claudeOut = run({ tool_name: 'Write', tool_input: { file_path: mdPath }, cwd: process.cwd() });
+  check('claude payload keeps the PostToolUse contract', claudeOut.includes('hookSpecificOutput') && claudeOut.includes('PostToolUse'));
+}
 
 // findings come with one-shot bad→good fix exemplars
 const rendered = await renderForAgent('x.md', [

@@ -1,19 +1,25 @@
 #!/usr/bin/env node
-// Claude Code PostToolUse hook (Edit|Write|MultiEdit). Two jobs, both fed back into the turn as
-// additionalContext: (1) lint edited *markdown* with the deterministic detector (+ optional
-// grammar + i18n staleness), and (2) fire user-defined *edit rules* on *any* edited file so the
-// agent gets reminded to do follow-up work (e.g. "the API changed — update docs/api/**").
+// Post-edit hook (Claude Code PostToolUse Edit|Write|MultiEdit; also wired for Cursor's
+// afterFileEdit, Codex, and Copilot via `--provider=`). Two jobs, both fed back into the turn:
+// (1) lint edited *markdown* with the deterministic detector (+ optional grammar + i18n
+// staleness), and (2) fire user-defined *edit rules* on *any* edited file so the agent gets
+// reminded to do follow-up work (e.g. "the API changed — update docs/api/**").
+//
+// The host is declared explicitly by each hooks manifest passing `--provider=claude|cursor|
+// codex|copilot` (or MARI_HOOK_PROVIDER); the default remains the Claude Code contract.
 //
 // CONTRACT: never break the turn. Every path exits 0; on any failure we emit nothing.
 
 import { readStdin, editedFile, targetFile, lint, renderForAgent, i18nNote, rulesNotice, safe } from './hook-lib.mjs';
 
 const QUIET_DEFAULT = true;
+const PROVIDER = (process.argv.find((a) => a.startsWith('--provider='))?.split('=')[1]
+  || process.env.MARI_HOOK_PROVIDER || 'claude').toLowerCase();
 
 (async () => {
   try {
     const payload = await readStdin();
-    const cwd = payload?.cwd || process.cwd();
+    const cwd = payload?.cwd || payload?.workspace_roots?.[0] || process.cwd();
     const fp = editedFile(payload);
     if (!fp) return done();
 
@@ -49,9 +55,16 @@ const QUIET_DEFAULT = true;
   }
 })();
 
-function emit(additionalContext) {
-  const out = { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext } };
-  try { process.stdout.write(JSON.stringify(out)); } catch { /* ignore */ }
+// Output shape per host. Claude Code (default): PostToolUse additionalContext JSON. Cursor:
+// `agentMessage` (Cursor's hook-response field for feeding text to the agent; afterFileEdit is
+// observational, so this is best-effort). Codex/Copilot: plain text on stdout — neither
+// publishes a structured post-edit response contract, and both surface hook stdout.
+function emit(text) {
+  try {
+    if (PROVIDER === 'cursor') process.stdout.write(JSON.stringify({ agentMessage: text }));
+    else if (PROVIDER === 'codex' || PROVIDER === 'copilot') process.stdout.write(text);
+    else process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: text } }));
+  } catch { /* ignore */ }
 }
 
 function done() { process.exit(0); }

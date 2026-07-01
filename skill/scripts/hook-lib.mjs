@@ -42,6 +42,14 @@ function severityFloor(findings, config) {
   return findings.filter((f) => (SEV_RANK[f.severity] ?? 0) >= floor);
 }
 
+// Merged findings (detector + grammar) sorted most-important-first, so truncation in
+// renderForAgent drops the least important, not whatever happened to be appended last.
+// Copies — never mutates the caller's array.
+function sortMerged(findings) {
+  return [...findings].sort((a, b) =>
+    ((SEV_RANK[b.severity] ?? -1) - (SEV_RANK[a.severity] ?? -1)) || ((a.line ?? 0) - (b.line ?? 0)));
+}
+
 // Decide the prose target file from a Claude Code PostToolUse payload. Markdown only — returns
 // null if nothing to lint.
 export function targetFile(payload) {
@@ -50,12 +58,16 @@ export function targetFile(payload) {
   return fp;
 }
 
-// Any edited file from an Edit/Write/MultiEdit payload (any extension), if it exists on disk.
-// Edit rules fire on these — source, config, anything — not just markdown.
+// Any edited file from a post-edit payload (any extension), if it exists on disk. Edit rules
+// fire on these — source, config, anything — not just markdown. Provider-tolerant like
+// proposedEdit: Claude Code sends { tool_name, tool_input: { file_path } }; Cursor's
+// afterFileEdit sends { file_path, edits }; other hosts send a bare path/file field. When a
+// tool_name IS present it must be an edit tool (so Bash/Read payloads never match).
 export function editedFile(payload) {
-  if (!['Edit', 'Write', 'MultiEdit'].includes(payload?.tool_name)) return null;
-  const fp = payload?.tool_input?.file_path;
-  if (!fp || !existsSync(fp)) return null;
+  if (payload?.tool_name && !['Edit', 'Write', 'MultiEdit'].includes(payload.tool_name)) return null;
+  const ti = payload?.tool_input || {};
+  const fp = ti.file_path || ti.path || payload?.file_path || payload?.path || payload?.file || null;
+  if (!fp || typeof fp !== 'string' || !existsSync(fp)) return null;
   return fp;
 }
 
@@ -83,37 +95,58 @@ export async function lint(fp, cwd) {
   const rel = relative(cwd, fp) || fp;
   if (config && fileIgnored(rel, config.ignoreFiles)) return { findings: [] };
   const text = readFileSync(fp, 'utf8');
-  const findings = severityFloor(detectText(text, { config }), config)
-    .concat(severityFloor(await grammarFindings(text, config), config));
+  const findings = sortMerged(severityFloor(detectText(text, { config }), config)
+    .concat(severityFloor(await grammarFindings(text, config), config)));
   return { rel, findings, config };
 }
 
-// Pre-write path (Cursor): lint a proposed content string that isn't on disk yet.
+// Pre-write path: lint a proposed content string that isn't on disk yet.
 export async function lintContent(text, cwd, ext = '.md') {
-  const PROSE = new Set(['.md', '.mdx', '.mdc', '.markdown']);
   if (!PROSE.has(ext.toLowerCase())) return { findings: [] };
   const { detectText } = await import(ENGINE);
   const { loadConfig } = await import(CONFIG);
   const config = safe(() => loadConfig(cwd), null);
   if (config?.hook?.enabled === false) return { disabled: true, findings: [] };
-  const findings = severityFloor(detectText(text, { config }), config)
-    .concat(severityFloor(await grammarFindings(text, config), config));
+  const findings = sortMerged(severityFloor(detectText(text, { config }), config)
+    .concat(severityFloor(await grammarFindings(text, config), config)));
   return { findings, config };
 }
 
+// Lint each proposed fragment SEPARATELY — MultiEdit fragments are disjoint snippets, and
+// joining them would fabricate adjacency (false repeated-word/cadence hits across edits) and
+// misattribute line numbers. Every finding gets a fragment-relative `lineLabel` ("edit #2 L3")
+// unless the payload carried the whole file (`isFullContent`), where lines are file-accurate.
+export async function lintFragments(fragments, cwd, ext = '.md', { isFullContent = false } = {}) {
+  const out = [];
+  let config = null, disabled = false;
+  for (let i = 0; i < fragments.length; i++) {
+    const res = await lintContent(fragments[i], cwd, ext);
+    if (res.disabled) { disabled = true; break; }
+    config = config || res.config;
+    for (const f of res.findings) {
+      out.push(isFullContent ? f : { ...f, lineLabel: `edit #${i + 1} L${f.line}` });
+    }
+  }
+  return { disabled, findings: sortMerged(out), config };
+}
+
 // Extract the proposed file path + content from a pre-write payload (provider-tolerant).
+// `fragments` are the individual proposed snippets (one per MultiEdit edit); `text` is the
+// legacy joined view; `isFullContent` marks a whole-file Write where lines are file-accurate.
 export function proposedEdit(payload) {
   const ti = payload?.tool_input || payload || {};
   const fp = ti.file_path || ti.path || payload?.file_path || '';
-  const text = ti.content ?? ti.new_string ?? ti.new_text ??
-    (Array.isArray(ti.edits) ? ti.edits.map((e) => e.new_string || e.new_text || '').join('\n') : '') ?? '';
-  return { fp, text };
+  let fragments = [];
+  if (ti.content != null) fragments = [String(ti.content)];
+  else if (ti.new_string != null || ti.new_text != null) fragments = [String(ti.new_string ?? ti.new_text)];
+  else if (Array.isArray(ti.edits)) fragments = ti.edits.map((e) => String(e.new_string ?? e.new_text ?? ''));
+  return { fp, text: fragments.join('\n'), fragments, isFullContent: ti.content != null };
 }
 
 export async function renderForAgent(rel, findings, max = 10) {
   const sev = (s) => (s === 'error' ? 'error   ' : s === 'warn' ? 'warn    ' : 'advisory');
   const shown = findings.slice(0, max);
-  const lines = shown.map((f) => `  L${String(f.line).padEnd(4)} ${sev(f.severity)} ${f.ruleId.padEnd(22)} ${f.message}`);
+  const lines = shown.map((f) => `  ${String(f.lineLabel || 'L' + f.line).padEnd(5)} ${sev(f.severity)} ${f.ruleId.padEnd(22)} ${f.message}`);
   const more = findings.length > max ? `\n  (+${findings.length - max} more — run /mari audit ${rel})` : '';
   const counts = findings.reduce((a, f) => { a[f.severity]++; return a; }, { error: 0, warn: 0, advisory: 0 });
 

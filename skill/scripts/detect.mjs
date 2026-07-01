@@ -14,15 +14,22 @@ const styleOpt = args.find((a) => a.startsWith('--style='));
 const targets = args.filter((a) => !a.startsWith('--'));
 if (!targets.length) targets.push('.');
 
-const root = process.cwd();
-const config = loadConfig(root);
-if (styleOpt) config.styleGuide = styleOpt.split('=')[1];
+// Exit codes: 0 = clean, 1 = findings present, 2 = engine/usage fault. An engine crash must
+// not masquerade as "findings present".
+try {
+  const root = process.cwd();
+  const config = loadConfig(root);
+  if (styleOpt) config.styleGuide = styleOpt.split('=')[1];
 
-const results = [];
-for (const t of targets) {
-  if (!existsSync(t)) { console.error(`No such path: ${t}`); process.exit(2); }
-  results.push(...detectTarget(t, { config, root }));
+  const results = [];
+  for (const t of targets) {
+    if (!existsSync(t)) { console.error(`No such path: ${t}`); process.exit(2); }
+    results.push(...detectTarget(t, { config, root }));
+  }
+
+  console.log(flags.has('--json') ? renderJSON(results) : renderHuman(results, { quiet: flags.has('--quiet') }));
+  process.exit(summarize(results).error > 0 ? 1 : 0);
+} catch (e) {
+  console.error(`mari detect fault: ${e?.message || e}`);
+  process.exit(2);
 }
-
-console.log(flags.has('--json') ? renderJSON(results) : renderHuman(results, { quiet: flags.has('--quiet') }));
-process.exit(summarize(results).error > 0 ? 1 : 0);

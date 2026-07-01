@@ -97,6 +97,8 @@ Visit [mari.style](https://mari.style#casestudies) to see before/after rewrites 
 
 ## Installation
 
+Installing mari downloads **no models and no heavy artifacts** — the package has zero runtime dependencies. Optional layers (Harper grammar, the Python ML sidecar, GGUF attention models) are opt-in and fetch their weights only on first use.
+
 ### Option 1: CLI installer (Recommended)
 
 From the root of your project, run:
@@ -141,16 +143,18 @@ If you reach for one command often, pin it with `/mari pin deslop` to get `/desl
 
 ## Editorial hook
 
-On Claude Code, GitHub Copilot, Codex, and Cursor, `npx mari install` and `npx mari update` install a provider-native hook manifest along with the skill payload. The hook runs the Mari detector on direct edits to markdown files (`.md`, `.markdown`, `.mdx`, `.mdc`) and surfaces findings back into the agent flow. Claude Code, GitHub Copilot, and Codex surface findings after the edit. Cursor blocks slop-laden proposed writes before they land.
+On Claude Code, GitHub Copilot, Codex, and Cursor, `npx mari install` and `npx mari update` install a provider-native hook manifest along with the skill payload. The hook runs the Mari detector on direct edits to markdown files (`.md`, `.markdown`, `.mdx`, `.mdc`) and surfaces findings back into the agent flow. All four hosts surface findings after the edit (Cursor has no blocking pre-edit hook event, so it uses `afterFileEdit` like the others). Each manifest passes `--provider=claude|cursor|codex|copilot` to the hook script so the output matches the host's contract.
 
 To keep the signal high, the hook surfaces only **error and warn** findings by default — advisories are the bulk of any file and would bury the actionable ones after a small edit. They stay available on demand via `mari audit`. Set `hook.minSeverity` in `.mari/config.json` (`error` | `warn` | `advisory`) to change the floor.
 
 Installed hook surfaces:
 
-- Claude Code: `.claude/settings.local.json` (gitignored, machine-local) runs `${CLAUDE_PROJECT_DIR}/.claude/skills/mari/scripts/hook.mjs`. A hook moved into the shared `settings.json` is honored in place.
-- GitHub Copilot: `.github/hooks/mari.json` (committed, shared by the Copilot CLI and the cloud agent) runs `.github/skills/mari/scripts/hook.mjs`. The Copilot CLI activates it once the file is on the repository's default branch and the folder is trusted.
-- Cursor: `.cursor/hooks.json` runs `.cursor/skills/mari/scripts/hook-before-edit.mjs`.
-- Codex: `.codex/hooks.json` runs `.agents/skills/mari/scripts/hook.mjs`.
+- Claude Code: `.claude/settings.local.json` (gitignored, machine-local). A hook moved into the shared `settings.json` is honored in place.
+- GitHub Copilot: `.github/hooks/mari.json` (committed, shared by the Copilot CLI and the cloud agent). The Copilot CLI activates it once the file is on the repository's default branch and the folder is trusted.
+- Cursor: `.cursor/hooks.json` (`"version": 1`, `afterFileEdit`).
+- Codex: `.codex/hooks.json` (`afterEdit`).
+
+The installer writes each manifest command as `node "<mari package>/skill/scripts/hook.mjs" --provider=<host>` — an absolute path into the installed mari package, so the hook works regardless of the directory the host launches it from. (This repo's own committed manifests use repo-relative paths instead, since here the repo *is* the package.) Re-running `mari install` or `mari update` migrates entries written by older versions. Caveat: if you installed via `npx` rather than a project or global `npm install`, the absolute path points into the npx cache, which can be evicted — prefer `npm install -D mari` for durable hooks.
 
 The installer preserves unrelated hook entries and settings. If a hook manifest is malformed, install/update aborts by default; rerun with `--force` to back up the malformed file as `.bak` and replace it.
 
@@ -211,7 +215,7 @@ The detector catches **171 deterministic issues** across four families:
 
 The base style guide selects which conformance rules fire. Mari ships full rule packs for the **Microsoft Writing Style Guide**, the **Google developer documentation style guide**, **AP**, **Chicago**, and **plainlanguage.gov**. The Microsoft and Google packs are a direct port of [Vale](https://vale.sh)'s official style packages — **96% of their deterministically-checkable rules** (the rest need a part-of-speech tagger or proper-noun detection, which a deterministic linter can't do reliably) — tuned for AI-generated drafts.
 
-**Optional grammar + mechanics pass.** The conformance rules above are pure-deterministic. For real grammar — broken English, wrong articles, agreement, confusables — Mari can run an opt-in pass through [Harper](https://github.com/Automattic/harper), Automattic's Rust→WASM offline grammar checker. It runs entirely on-device (no API key, no network) and is markdown-aware (it skips code). It's **off by default** and high-precision: Mari keeps only Harper's "broken English" lint kinds (agreement, grammar, articles, confusables, redundancy) and drops its noisy ones (spelling, title-case headings, compound-splitting) that false-positive on technical docs. Enable per run with `mari detect --grammar`, or in the edit hook with `"hook": { "grammar": true }` so the agent can correct grammar in the same turn it edits. Requires the optional `harper.js` dependency (`npm install harper.js`).
+**Optional grammar + mechanics pass.** The conformance rules above are pure-deterministic. For real grammar — broken English, wrong articles, agreement, confusables — Mari can run an opt-in pass through [Harper](https://github.com/Automattic/harper), Automattic's Rust→WASM offline grammar checker. It runs entirely on-device (no API key, no network) and is markdown-aware (it skips code). It's **off by default** and high-precision: Mari keeps only Harper's "broken English" lint kinds (agreement, grammar, articles, confusables, redundancy) and drops its noisy ones (spelling, title-case headings, compound-splitting) that false-positive on technical docs. Enable per run with `mari detect --grammar`, or in the edit hook with `"hook": { "grammar": true }` so the agent can correct grammar in the same turn it edits. Harper is **not installed with mari** (its ~18&nbsp;MB WASM engine would otherwise download for everyone at install time); opt in with `npm install harper.js` in your project, and Mari picks it up automatically.
 
 By default, `detect` respects the same `.mari/config.json` and `.mari/config.local.json` detector config as the hook: `detector.ignoreRules`, `detector.ignoreFiles`, `detector.ignoreValues`, and `detector.styleGuide`.
 

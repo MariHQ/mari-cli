@@ -2,7 +2,7 @@
   "hooks": [
     {
       "event": "afterEdit",
-      "command": "node skill/scripts/hook.mjs"
+      "command": "node skill/scripts/hook.mjs --provider=codex"
     }
   ]
 }

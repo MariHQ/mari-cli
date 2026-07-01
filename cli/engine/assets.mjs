@@ -14,11 +14,11 @@
 function norm(s) {
   return String(s).toLowerCase().replace(/[`*_#:]/g, '').replace(/^\d+[.)]\s*/, '').replace(/\s+/g, ' ').trim();
 }
-// A section is present if a heading equals or starts with one of its aliases. `startsWith`
-// keeps "Context and Problem Statement" matching "context" while "Non-goals" does NOT match
-// the "goals" alias (it starts with "non").
+// A section is present if a heading equals an alias or starts with it at a WORD boundary —
+// "Context and Problem Statement" matches "context", but "Non-goals" does not match "goals"
+// and "Why not X?" does not match a bare "why" prefix inside another word.
 function hasSection(headings, aliases) {
-  return headings.some((h) => { const n = norm(h.text); return aliases.some((a) => n === a || n.startsWith(a + ' ') || n.startsWith(a)); });
+  return headings.some((h) => { const n = norm(h.text); return aliases.some((a) => n === a || n.startsWith(a + ' ')); });
 }
 function countMarkers(headings, markers) {
   let n = 0;
@@ -79,7 +79,7 @@ export function assetSpec(type) { return byType[type] || null; }
 
 // Parse a leading YAML/TOML front-matter block into a flat key→value map (best-effort).
 function frontmatter(text) {
-  const m = text.match(/^(---|\+\+\+)\n([\s\S]*?)\n\1(?:\n|$)/);
+  const m = text.match(/^(---|\+\+\+)\r?\n([\s\S]*?)\r?\n\1(?:\r?\n|$)/);
   if (!m) return {};
   const out = {};
   for (const line of m[2].split('\n')) {
@@ -138,7 +138,7 @@ export function validateAsset(ctx, type) {
   // accept `Status:` lines and front-matter keys too.
   const hasField = (aliases) => {
     const t = ctx.text || '';
-    return aliases.some((a) => new RegExp(`^[\\s>*-]*${a.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\s*[:=]`, 'im').test(t));
+    return aliases.some((a) => new RegExp(`^[\\s>*-]*${a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[:=]`, 'im').test(t));
   };
   const present = (s) => hasSection(headings, s.aliases) || (s.meta && hasField(s.aliases));
   for (const s of spec.required) if (!present(s)) emit('warn', s.name, 'required');
