@@ -111,15 +111,21 @@ async function detect() {
     }
   }
 
+  // GLiNER span extraction is opt-in on top of --models. Zero-shot slop labels can't reliably
+  // separate domain noun-phrases ("failure recovery") from marketing slop ("our offering") —
+  // they score in the same band — so it's noisy on technical docs and off by the default path.
+  const wantSlopSpans = flag('slop-spans') || ['1', 'true', 'on'].includes(process.env.MARI_SLOP_SPANS || '');
   if (useModels) {
-    console.error('(loading models — Qwen perplexity + GLiNER spans…)');
+    console.error(wantSlopSpans ? '(loading models — Qwen perplexity + GLiNER spans…)' : '(loading models — Qwen perplexity…)');
     await warmup();
-    for (const r of results) {
-      if (!r.text) continue;
-      try {
-        const extra = await mlSlopFindings(r.text, r.findings, segment(r.text).locate);
-        if (extra.length) r.findings = r.findings.concat(extra);
-      } catch { /* ml failures never break detection */ }
+    if (wantSlopSpans) {
+      for (const r of results) {
+        if (!r.text) continue;
+        try {
+          const extra = await mlSlopFindings(r.text, r.findings, segment(r.text).locate);
+          if (extra.length) r.findings = r.findings.concat(extra);
+        } catch { /* ml failures never break detection */ }
+      }
     }
   }
 
@@ -155,7 +161,7 @@ async function detect() {
   else console.log(renderHuman(results, { quiet }));
   const s = summarize(results);
   const fail = s.error > 0 || (strict && s.warn > 0);
-  process.exit(fail ? 1 : 0);
+  process.exitCode = fail ? 1 : 0;
 }
 
 function ensureMariDir(root) {
@@ -518,7 +524,7 @@ async function runFactcheck() {
     console.error('--deep grounding needs facts: add FACTS.md or pass --source <file>.'); process.exit(2);
   }
   const s = summarize(results);
-  process.exit(s.error > 0 || (flag('strict') && s.warn > 0) ? 1 : 0);
+  process.exitCode = s.error > 0 || (flag("strict") && s.warn > 0) ? 1 : 0;
 }
 
 function facts() {
@@ -618,7 +624,7 @@ function asset() {
     for (const f of findings) console.log(`  L${String(f.line).padEnd(4)} ${sev(f.severity)} ${f.ruleId.padEnd(22)} ${f.message}`);
     const miss = findings.filter((f) => f.severity === 'warn').length;
     console.log(`\n${miss} required section(s) missing · ${findings.length - miss} other note(s)`);
-    process.exit(flag('strict') && miss > 0 ? 1 : 0);
+    process.exitCode = flag("strict") && miss > 0 ? 1 : 0;
   }
   console.error(`Usage: mari asset detect <file> | check <file> | scaffold <${types}> [title]`); process.exit(2);
 }
@@ -902,7 +908,7 @@ function i18nConformCmd() {
   }
   console.log(`\n${clean}/${translations.length} structurally in sync · ${warns} structural drift(s).`);
   if (!withAttn) console.log(`Tip: add --deep to localize which prose the translation skipped (~3s, opt-in).`);
-  process.exit(flag('strict') && warns > 0 ? 1 : 0);
+  process.exitCode = flag("strict") && warns > 0 ? 1 : 0;
 }
 
 const MD_EXT = /\.(md|mdx|mdc|markdown)$/i;
@@ -959,7 +965,7 @@ function i18nConformSweep(dir, config) {
   console.log(`\n${sources} localized source doc(s) · ${clean} in sync · ${drifted} with structural drift.`);
   if (withAttn) console.log(`(attention localized prose on the ${attnSet.size} worst-drifted of ${drifted}; use --limit N or run a single file)`);
   else console.log(`Tip: add --deep to localize skipped prose (worst-drifted first; --limit N to cap; ~3s/doc).`);
-  process.exit(flag('strict') && drifted > 0 ? 1 : 0);
+  process.exitCode = flag("strict") && drifted > 0 ? 1 : 0;
 }
 
 const PINNABLE = new Set(['audit', 'deslop', 'tighten', 'clarify', 'critique', 'polish', 'document', 'draft', 'outline', 'glossary', 'sharpen', 'soften', 'harden', 'voice', 'cadence', 'format', 'delight', 'adapt', 'localize', 'live', 'factcheck']);
@@ -988,7 +994,7 @@ function usage() {
   console.log(`mari — deterministic AI-slop + house-style detector (MVP)
 
 Usage:
-  mari detect <path|.> [--json] [--summary] [--score] [--strict] [--quiet] [--stdin] [--style=microsoft|google|ap|chicago|plain] [--models] [--grammar] [--no-config]
+  mari detect <path|.> [--json] [--summary] [--score] [--strict] [--quiet] [--stdin] [--style=microsoft|google|ap|chicago|plain] [--models] [--slop-spans] [--grammar] [--no-config]
   mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value> [--reason "…"]
   mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--ground=attention]   Check claims vs FACTS.md
   mari facts list | add "<fact>"                                Manage the fact base
