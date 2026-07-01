@@ -25,6 +25,11 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 NLI_MODEL = os.environ.get("MARI_NLI_MODEL", "cross-encoder/nli-deberta-v3-xsmall")
 PPL_MODEL = os.environ.get("MARI_PPL_MODEL", "Qwen/Qwen3.5-0.8B")
+# Sentence embeddings for code<->doc association (mari assoc). Loaded via AutoModel + mean
+# pooling so no extra dependency (sentence-transformers) is needed. all-MiniLM is a small,
+# cached default; a code-aware model (e.g. jinaai/jina-embeddings-v2-base-code) can do better
+# on comment-free code — override with MARI_EMBED_MODEL.
+EMBED_MODEL = os.environ.get("MARI_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 # gliner_multi (mDeBERTa base) is used over gliner_small: on abstract stylistic labels the
 # small model's zero-shot scores are noise (a clean "Flink" outscores real buzzwords), while
 # multi cleanly separates slop (~0.2-0.3) from clean prose (<0.12). It's also multilingual,
@@ -129,6 +134,18 @@ def get_gliner():
     return _cached("gliner", _load)
 
 
+def get_embed():
+    def _load():
+        from transformers import AutoTokenizer, AutoModel
+        log(f"[mari-ml] loading embeddings {EMBED_MODEL} ...")
+        tok = AutoTokenizer.from_pretrained(EMBED_MODEL)
+        model = AutoModel.from_pretrained(EMBED_MODEL)
+        model.eval()
+        model.to(_device())
+        return (tok, model)
+    return _cached("embed", _load)
+
+
 def get_decomp():
     return _cached("decomp", lambda: _load_causal(DECOMP_MODEL))
 
@@ -148,6 +165,27 @@ def do_nli(req):
     scores = {str(id2label[i]).lower(): round(float(p), 4) for i, p in enumerate(probs)}
     label = max(scores, key=scores.get)
     return {"label": label, "scores": scores}
+
+
+def do_embed(req):
+    torch = _torch()
+    tok, model = get_embed()
+    texts = req.get("texts") or ([req["text"]] if req.get("text") else [])
+    if not texts:
+        return {"vectors": []}
+    batch = int(os.environ.get("MARI_EMBED_BATCH", "32"))
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(texts), batch):
+            chunk = texts[i:i + batch]
+            enc = tok(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512)
+            enc = {k: v.to(_device()) for k, v in enc.items()}
+            hidden = model(**enc).last_hidden_state          # (B, T, H)
+            mask = enc["attention_mask"].unsqueeze(-1).float()  # (B, T, 1)
+            pooled = (hidden * mask).sum(1) / mask.sum(1).clamp(min=1e-9)  # mean pool
+            pooled = torch.nn.functional.normalize(pooled.float(), p=2, dim=1)  # L2 unit vectors
+            out.extend(pooled.cpu().tolist())
+    return {"vectors": [[round(x, 6) for x in v] for v in out]}
 
 
 def do_perplexity(req):
@@ -318,7 +356,7 @@ def do_lookback(req):
 
 
 HANDLERS = {"nli": do_nli, "perplexity": do_perplexity, "spans": do_spans,
-            "decompose": do_decompose, "lookback": do_lookback}
+            "decompose": do_decompose, "lookback": do_lookback, "embed": do_embed}
 
 
 def main():
@@ -332,7 +370,7 @@ def main():
             task = req.get("task")
             if task == "ping":
                 resp = {"ok": True, "models": {"nli": NLI_MODEL, "ppl": PPL_MODEL, "gliner": GLINER_MODEL,
-                                               "decomp": DECOMP_MODEL, "lookback": LOOKBACK_MODEL}}
+                                               "decomp": DECOMP_MODEL, "lookback": LOOKBACK_MODEL, "embed": EMBED_MODEL}}
             elif task in HANDLERS:
                 t0 = time.time()
                 resp = HANDLERS[task](req)

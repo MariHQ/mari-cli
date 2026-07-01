@@ -111,6 +111,16 @@ export async function perplexity(text) {
   return r.ppl;
 }
 
+// Sentence embeddings for code<->doc association. Returns an array of L2-normalized vectors
+// (one per input string), so cosine similarity is a plain dot product. Batched in the sidecar.
+export async function embed(texts) {
+  const arr = Array.isArray(texts) ? texts : [texts];
+  if (!arr.length) return [];
+  const r = await request({ task: 'embed', texts: arr });
+  return r.vectors || [];
+}
+export function cosine(a, b) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+
 // Tier 2: atomic-claim decomposition (instruct LM). A sentence → array of self-contained claims.
 export async function decomposeClaims(text) {
   const r = await request({ task: 'decompose', text });
