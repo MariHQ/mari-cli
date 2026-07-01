@@ -9,7 +9,26 @@ import { factcheckNLI, factcheckDecomposed, factcheckLookback, parseFacts } from
 let pass = 0, fail = 0;
 const check = (name, cond, extra = '') => { if (cond) { pass++; console.log(`  ✓ ${name}${extra && '  ' + extra}`); } else { fail++; console.log(`  ✗ ${name}  ${extra}`); } };
 
-console.log('capabilities:', JSON.stringify(capabilities().models));
+const caps = capabilities();
+console.log('capabilities:', JSON.stringify(caps.models));
+if (!caps.available) {
+  console.log('SKIP: ML sidecar unavailable (no Python with ml/requirements.txt installed).');
+  console.log('      Opt in with: python3 -m venv .venv && .venv/bin/pip install -r ml/requirements.txt');
+  process.exit(0);
+}
+
+// Probe the sidecar: a Python without the ml deps (e.g. bare PATH python3) should SKIP, not crash.
+try {
+  await nliEntail('probe', 'probe');
+} catch (e) {
+  if (/ModuleNotFoundError|No module named|sidecar exited|sidecar unavailable/i.test(String(e.message))) {
+    console.log('SKIP: Python found but ML deps missing. Opt in with:');
+    console.log('      python3 -m venv .venv && .venv/bin/pip install -r ml/requirements.txt');
+    shutdown();
+    process.exit(0);
+  }
+  throw e;
+}
 
 // --- NLI entailment ---
 const contra = await nliEntail('Mari ships 90 detector rules.', 'Mari ships 62 detector rules.');

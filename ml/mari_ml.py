@@ -20,7 +20,7 @@ os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 NLI_MODEL = os.environ.get("MARI_NLI_MODEL", "cross-encoder/nli-deberta-v3-xsmall")
-PPL_MODEL = os.environ.get("MARI_PPL_MODEL", "Qwen/Qwen3.5-0.8B")
+PPL_MODEL = os.environ.get("MARI_PPL_MODEL", "Qwen/Qwen3-0.6B")
 GLINER_MODEL = os.environ.get("MARI_GLINER_MODEL", "urchade/gliner_small-v2.1")
 # Generative grounding tier (opt-in, heavier): Tier 2 atomic-claim decomposition (instruct LM)
 # and Tier 4 Lookback-Lens attention grounding (needs eager attention to read the matrices).
@@ -118,7 +118,8 @@ def do_perplexity(req):
         return {"ppl": None}
     with torch.no_grad():
         loss = model(ids, labels=ids).loss
-    return {"ppl": round(float(math.exp(loss.item())), 3)}
+    # clamp: exp(>709) overflows to OverflowError on gibberish; cap at a very-high-ppl sentinel
+    return {"ppl": round(float(math.exp(min(loss.item(), 700.0))), 3)}
 
 
 def do_spans(req):

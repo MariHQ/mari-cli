@@ -2,7 +2,7 @@
 // gliner). No stubs: every call here drives an actual model running in ml/mari_ml.py.
 //
 //   • NLI       — cross-encoder/nli-deberta-v3-xsmall : sentence-pair entailment (grounding T3)
-//   • LM/ppl    — Qwen/Qwen3.5-0.8B                   : token perplexity → machine-likelihood
+//   • LM/ppl    — Qwen/Qwen3-0.6B                     : token perplexity → machine-likelihood
 //   • GLiNER    — urchade/gliner_small-v2.1           : zero-shot slop-span extraction
 //
 // The sidecar is a long-lived child process spoken to over JSON lines, so models load once.
@@ -10,7 +10,7 @@
 // never spawn Python, staying instant. Availability is gated on a usable Python interpreter with
 // the deps installed (the project .venv by default, or $MARI_PYTHON).
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -20,10 +20,25 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..', '..');
 const SCRIPT = join(ROOT, 'ml', 'mari_ml.py');
 
+let _pyCache;
 function pythonPath() {
-  if (process.env.MARI_PYTHON && existsSync(process.env.MARI_PYTHON)) return process.env.MARI_PYTHON;
-  const venv = join(ROOT, '.venv', 'bin', 'python');
-  return existsSync(venv) ? venv : null;
+  if (_pyCache !== undefined) return _pyCache;
+  if (process.env.MARI_PYTHON && existsSync(process.env.MARI_PYTHON)) return (_pyCache = process.env.MARI_PYTHON);
+  // venv candidates: package-root .venv, then cwd .venv; POSIX bin/ and Windows Scripts/ layouts
+  for (const base of [ROOT, process.cwd()]) {
+    for (const rel of [['bin', 'python'], ['Scripts', 'python.exe']]) {
+      const p = join(base, '.venv', ...rel);
+      if (existsSync(p)) return (_pyCache = p);
+    }
+  }
+  // last resort: python3 on PATH (deps may still be missing; the sidecar reports that on spawn)
+  for (const name of process.platform === 'win32' ? ['python', 'python3'] : ['python3']) {
+    try {
+      const r = spawnSync(name, ['--version'], { stdio: 'ignore' });
+      if (r.status === 0) return (_pyCache = name);
+    } catch { /* not on PATH */ }
+  }
+  return (_pyCache = null);
 }
 
 export function modelsEnabled() {
@@ -36,7 +51,7 @@ export function capabilities() {
     python: pythonPath(),
     available: !!pythonPath() && existsSync(SCRIPT),
     runtime: 'python sidecar (torch/transformers/gliner)',
-    models: { nli: 'cross-encoder/nli-deberta-v3-xsmall', ppl: process.env.MARI_PPL_MODEL || 'Qwen/Qwen3.5-0.8B', gliner: 'urchade/gliner_small-v2.1',
+    models: { nli: 'cross-encoder/nli-deberta-v3-xsmall', ppl: process.env.MARI_PPL_MODEL || 'Qwen/Qwen3-0.6B', gliner: 'urchade/gliner_small-v2.1',
       decomp: process.env.MARI_DECOMP_MODEL || 'Qwen/Qwen2.5-0.5B-Instruct', lookback: process.env.MARI_LOOKBACK_MODEL || 'Qwen/Qwen3-0.6B' },
   };
 }

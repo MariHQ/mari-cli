@@ -4,10 +4,11 @@ A vendored copy of the attention extractor (github.com/henneberger/attention), w
 entry point added. Builds two binaries against a local llama.cpp checkout:
 
 - `attn_extract` — the original generic tool (heatmap.tar.gz + web explorer).
-- `mari_attn` — Mari's entry point (`mari_attn.cpp`): forces `--mari-coverage`, which puts the
-  SOURCE as context and the TRANSLATION as query, sums attention each source span receives, and
-  emits Mari findings JSON (flagged low-coverage source spans the translation likely dropped).
-  No heatmap reparsing — the coverage is computed in C++ and printed as findings.
+- `mari_attn` — Mari's entry point (`mari_attn.cpp`): the same core, forwarding arguments
+  verbatim. The Mari CLI invokes it with `--mari-coverage` (SOURCE as context, TRANSLATION as
+  query; flags low-coverage source spans the translation likely dropped) or `--mari-grounding`
+  (flags query rows that barely attend to the context). Either mode emits Mari findings JSON —
+  no heatmap reparsing; the aggregation is computed in C++ and printed as findings.
 
 ## Shipping
 
@@ -16,9 +17,10 @@ Users do NOT compile this. A relocatable, ad-hoc-signed bundle is committed unde
 Mari CLI runs `dist/${process.platform}-${process.arch}/mari_attn` directly. Only a multilingual
 GGUF model is supplied at runtime via `MARI_ATTN_MODEL` (models are too large to vendor).
 
-To (re)build the bundle for a platform (needs a built llama.cpp at the CMake `LLAMA_DIR`):
+To (re)build the bundle for a platform (needs a built llama.cpp checkout; point `LLAMA_CPP_DIR`
+at it via `-DLLAMA_CPP_DIR=...` or the environment — defaults to `~/llama.cpp`):
 
-    cmake -S . -B build && cmake --build build --target mari_attn
+    cmake -S . -B build -DLLAMA_CPP_DIR=/path/to/llama.cpp && cmake --build build --target mari_attn
     ./bundle.sh        # → dist/<platform>/
 
 `mari i18n coverage <source.md> <translation.md>` then drives the shipped `mari_attn`.
