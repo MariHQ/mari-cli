@@ -633,6 +633,9 @@ const indefiniteArticle = {
     scan(ctx, /(?<![&\w.])(a|an)\s+([a-z][a-z'-]*)/gi, (m, i) => {
       // skip single-letter "A" inside abbreviations (D&A, S&M, G&A) — not an article
       if (/[&.]/.test(ctx.masked[i - 1] || '')) return;
+      // the article and word must be adjacent in the source too — a mismatch means the
+      // match spans blanked-out inline code ("a `WatermarkStrategy` is" → "a … is")
+      if (ctx.text.slice(i, i + m[0].length) !== m[0]) return;
       const art = m[1].toLowerCase(), w = m[2].toLowerCase();
       const startsVowel = /^[aeiou]/.test(w);
       if (art === 'a' && startsVowel && !aVowel.has(w)) emitAt(ctx, emit, this.id, FAM.C, 'advisory', i, m[0].length, `"a ${m[2]}" → "an ${m[2]}".`);

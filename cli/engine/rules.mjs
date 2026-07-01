@@ -230,6 +230,9 @@ const passiveVoice = {
       '\\b(am|is|are|was|were|be|been|being)\\s+(?:\\w+ly\\s+){0,2}([a-z]+(?:ed|en)|' +
       [...IRREGULAR_PP].join('|') + ')\\b', 'gi');
     scan(ctx, re, (m, i) => {
+      // verb and participle must be adjacent in the source — a mismatch means the match
+      // spans blanked-out inline code ("is `RocksDB` based" → "is … based")
+      if (ctx.text.slice(i, i + m[0].length) !== m[0]) return;
       const pp = m[2].toLowerCase();
       if (NOT_PARTICIPLE.has(pp)) return;
       const isPP = pp.endsWith('ed') || pp.endsWith('en') || IRREGULAR_PP.has(pp);
