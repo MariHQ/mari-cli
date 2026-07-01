@@ -21,6 +21,7 @@ import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGen
 import { segment } from '../engine/segment.mjs';
 import * as LEX from '../engine/lexicons.mjs';
 import { detectAssetType, validateAsset, scaffold, ASSET_TYPES } from '../engine/assets.mjs';
+import { detectPlatforms, scaffoldPlatform, scaffoldablePlatforms, platformSpec } from '../engine/platforms.mjs';
 import { i18nAssociations, i18nConform } from '../engine/i18n.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -30,7 +31,7 @@ const rest = argv.slice(1);
 
 // Value-taking options accept both `--opt=value` and `--opt value`. Listed so positionals()
 // can skip a space-form value and not mistake it for a positional argument.
-const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model', 'limit', 'paths', 'notify', 'exclude']);
+const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model', 'limit', 'paths', 'notify', 'exclude', 'name']);
 function flag(name) { return rest.includes(`--${name}`); }
 function opt(name, def = null) {
   const eq = rest.find((a) => a.startsWith(`--${name}=`));
@@ -63,6 +64,8 @@ async function main() {
     case 'factcheck': return await runFactcheck();
     case 'facts': return facts();
     case 'asset': return asset();
+    case 'platform':
+    case 'platforms': return platform();
     case 'i18n': return i18n();
     case 'live': return live();
     case undefined:
@@ -587,6 +590,95 @@ function asset() {
   console.error(`Usage: mari asset detect <file> | check <file> | scaffold <${types}> [title]`); process.exit(2);
 }
 
+// Docs-as-code platform setup: detect whether a docs-site generator is already wired up, list the
+// ones we can scaffold, or stand up a fresh one. The interactive "which platform?" choice lives in
+// the skill flow (skill/reference/platform.md); this command is deterministic — it scans, prints,
+// and writes files without prompting. Detection auto-runs before a scaffold so we never provision a
+// second site next to an existing one (override with --force).
+function walkForPlatforms(root, { maxDepth = 4, maxEntries = 20000 } = {}) {
+  const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'coverage', '.mari',
+    'target', 'out', 'vendor', '.venv', '_build', 'public', '.cache']);
+  const files = [];
+  let count = 0;
+  (function walk(dir, depth) {
+    if (depth > maxDepth || count > maxEntries) return;
+    let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (count++ > maxEntries) return;
+      if (SKIP.has(e.name)) continue;
+      const p = join(dir, e.name);
+      const rel = p.slice(root.length + 1);
+      if (e.isDirectory()) walk(p, depth + 1);
+      else files.push(rel);
+    }
+  })(root, 0);
+  return files;
+}
+
+function platform() {
+  const root = process.cwd();
+  const sub = rest[0] || 'detect';
+  const args = positionals().slice(1);
+  const scaffoldable = scaffoldablePlatforms();
+  const ids = scaffoldable.map((p) => p.id).join('|');
+
+  if (sub === 'list') {
+    if (flag('json')) { console.log(JSON.stringify(scaffoldable.map((p) => ({ id: p.id, label: p.label, lang: p.lang, site: p.site, build: p.build })), null, 2)); return; }
+    console.log('Docs-as-code platforms Mari can scaffold:\n');
+    for (const p of scaffoldable) console.log(`  ${p.id.padEnd(12)} ${p.label}  ·  ${p.lang}\n${''.padEnd(16)}${p.site}`);
+    return;
+  }
+
+  if (sub === 'detect') {
+    const found = detectPlatforms(walkForPlatforms(root));
+    if (flag('json')) { console.log(JSON.stringify(found, null, 2)); return; }
+    if (!found.length) {
+      console.log('No docs-as-code platform detected in this repo.');
+      console.log(`Run \`mari platform scaffold <${ids}>\` to set one up, or \`mari platform list\` to compare.`);
+      return;
+    }
+    console.log('Docs-as-code platform(s) already set up:\n');
+    for (const f of found) console.log(`  ${f.label} (${f.id}) — ${f.matched.join(', ')}`);
+    return;
+  }
+
+  if (sub === 'scaffold') {
+    const id = args[0];
+    const spec = platformSpec(id);
+    if (!spec || typeof spec.files !== 'function') {
+      console.error(`Usage: mari platform scaffold <${ids}> [--name "<title>"] [--force]`);
+      if (id) console.error(`Unknown or non-scaffoldable platform: ${id}`);
+      process.exit(2);
+    }
+    const force = flag('force');
+    if (!force) {
+      const found = detectPlatforms(walkForPlatforms(root));
+      if (found.length) {
+        console.error(`A docs platform is already set up (${found.map((f) => f.id).join(', ')}). Re-run with --force to scaffold anyway.`);
+        process.exit(1);
+      }
+    }
+    const out = scaffoldPlatform(id, { name: opt('name') });
+    // Never clobber existing files: if any target path exists, bail unless --force.
+    const clashes = out.files.filter((f) => existsSync(join(root, f.path)));
+    if (clashes.length && !force) {
+      console.error(`These files already exist — refusing to overwrite (use --force):\n  ${clashes.map((f) => f.path).join('\n  ')}`);
+      process.exit(1);
+    }
+    for (const f of out.files) {
+      const abs = join(root, f.path);
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, f.content);
+      console.log(`  wrote ${f.path}`);
+    }
+    console.log(`\n✓ Scaffolded ${out.label}. Next: ${out.build}`);
+    return;
+  }
+
+  console.error(`Usage: mari platform detect | list | scaffold <${ids}> [--name "<title>"] [--force]`);
+  process.exit(2);
+}
+
 // i18n association: list the translations of a doc (or the source, if a translation is given)
 // across the common localization layouts. Powers the hook's "translations may be stale" note.
 const shortenPath = (p) => String(p).replace(process.env.HOME || '~~', '~');
@@ -867,6 +959,7 @@ Usage:
   mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value>
   mari rules list | discover | add <name> --paths "<glob[,…]>" --notify "<message>" [--exclude "<glob>"] | remove <name>   Notify the agent on matching edits (e.g. update API docs)
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
+  mari platform detect | list | scaffold <name> [--name "<title>"] [--force]   Set up a docs-as-code site generator (MkDocs, Docusaurus, Sphinx, …) if none exists
   mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags

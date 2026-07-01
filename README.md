@@ -271,6 +271,36 @@ hook. When you work on a detected asset, the `/mari` skill loads the matching re
 (`skill/reference/asset-<type>.md`) and applies its structure, tone, and rubric on top of the
 register.
 
+## Docs-as-code platforms
+
+Good writing needs somewhere to live. When a repo has no documentation-site generator yet, the
+`/mari platform` command sets one up — it detects whether docs-as-code is already wired up, and if
+not, asks which platform you want and scaffolds a minimal, working site.
+
+```bash
+npx mari platform detect                          # is a docs-site generator already wired up?
+npx mari platform list                            # compare the platforms Mari can scaffold
+npx mari platform scaffold mkdocs --name "Acme"   # write a minimal, valid MkDocs site
+```
+
+| Platform | Runtime | Config written |
+|----------|---------|----------------|
+| **MkDocs** (Material) | Python | `mkdocs.yml` + `docs/index.md` |
+| **Docusaurus** | Node.js | `docusaurus.config.js` + `sidebars.js` + `docs/intro.md` |
+| **Sphinx** (MyST) | Python | `docs/conf.py` + `docs/index.md` |
+| **Hugo** | Go | `hugo.toml` + `content/_index.md` + archetype |
+| **Jekyll** | Ruby | `_config.yml` + `index.md` + `Gemfile` |
+| **mdBook** | Rust | `book.toml` + `src/SUMMARY.md` + intro |
+| **Antora** | Node.js | `antora-playbook.yml` + AsciiDoc module |
+| **Docsify** | none (static) | `docs/index.html` + `docs/README.md` + sidebar |
+
+Detection recognizes more platforms than it scaffolds (VitePress, Astro Starlight, GitBook, Read
+the Docs), so it won't propose standing up a second site next to one that already exists. The CLI
+is deterministic and never prompts — it refuses to overwrite existing files and re-checks detection
+before scaffolding (override with `--force`). The **choice** of platform happens in the `/mari`
+skill flow (`skill/reference/platform.md`), which recommends a fit for the repo's stack but lets
+you decide.
+
 ## Localized docs (i18n)
 
 When a doc has translations, editing the source should remind you the translations are now

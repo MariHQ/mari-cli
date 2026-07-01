@@ -54,8 +54,13 @@ of ground truth — run it first so every edit is grounded in concrete findings,
 - **No argument** → run the detector over the changed/target files, then surface the 2–3
   highest-value commands (many buzzword/cliché hits → `deslop`; long-sentence hits → `tighten`;
   passive/jargon → `clarify`; inclusive/heading/link hits → `audit`). Never auto-edit.
-- **First word is a deterministic command** (`detect`, `audit`, `asset`, `i18n`) → run the CLI
-  directly, skipping the setup phase (no `PRODUCT.md` needed):
+- **First word is a deterministic command** (`detect`, `audit`, `asset`, `i18n`, `platform`) → run
+  the CLI directly, skipping the setup phase (no `PRODUCT.md` needed):
+  - `platform` → set up a docs-as-code site generator if the repo has none. Load
+    `skill/reference/platform.md`. Run `node cli/bin/cli.js platform detect`. If nothing is set up,
+    **ask the user which platform** (`platform list` shows the options). Then run
+    `node cli/bin/cli.js platform scaffold <id> --name "<title>"`. The choice is a conversation; the
+    CLI never prompts.
   - `asset detect|check|scaffold <file>` → `node cli/bin/cli.js asset <sub> <target>`
   - `i18n <file>` → list a doc's translations; `i18n conform <file|dir>` → check every translation
     shares the source's structure (`node cli/bin/cli.js i18n conform <target>`). "i8n" means i18n.
