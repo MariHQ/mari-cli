@@ -25,11 +25,12 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 NLI_MODEL = os.environ.get("MARI_NLI_MODEL", "cross-encoder/nli-deberta-v3-xsmall")
 PPL_MODEL = os.environ.get("MARI_PPL_MODEL", "Qwen/Qwen3.5-0.8B")
-# Sentence embeddings for code<->doc association (mari assoc). Loaded via AutoModel + mean
-# pooling so no extra dependency (sentence-transformers) is needed. all-MiniLM is a small,
-# cached default; a code-aware model (e.g. jinaai/jina-embeddings-v2-base-code) can do better
-# on comment-free code — override with MARI_EMBED_MODEL.
-EMBED_MODEL = os.environ.get("MARI_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+# Sentence embeddings for code<->doc association (mari assoc). Qwen3-Embedding-0.6B is a
+# decoder embedder (last-token pooling + query instruction, see do_embed) purpose-built for
+# retrieval incl. code — on Flink it separates code<->doc better than a generic MiniLM. Override
+# with MARI_EMBED_MODEL (e.g. sentence-transformers/all-MiniLM-L6-v2 for a light mean-pool model,
+# or a Qwen base LM). No sentence-transformers dependency: loaded via AutoModel + manual pooling.
+EMBED_MODEL = os.environ.get("MARI_EMBED_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 # gliner_multi (mDeBERTa base) is used over gliner_small: on abstract stylistic labels the
 # small model's zero-shot scores are noise (a clean "Flink" outscores real buzzwords), while
 # multi cleanly separates slop (~0.2-0.3) from clean prose (<0.12). It's also multilingual,
@@ -138,8 +139,9 @@ def get_embed():
     def _load():
         from transformers import AutoTokenizer, AutoModel
         log(f"[mari-ml] loading embeddings {EMBED_MODEL} ...")
-        tok = AutoTokenizer.from_pretrained(EMBED_MODEL)
-        model = AutoModel.from_pretrained(EMBED_MODEL)
+        # trust_remote_code so code-aware models with custom modeling (e.g. jina-v2-code) load
+        tok = AutoTokenizer.from_pretrained(EMBED_MODEL, trust_remote_code=True)
+        model = AutoModel.from_pretrained(EMBED_MODEL, trust_remote_code=True)
         model.eval()
         model.to(_device())
         return (tok, model)
@@ -167,22 +169,44 @@ def do_nli(req):
     return {"label": label, "scores": scores}
 
 
+def _embed_pooling():
+    # BERT-style encoders (MiniLM, bge) → mean pool; decoder embedders (Qwen3-Embedding, or a
+    # Qwen base LM coerced into an embedder) → last-token pool. Auto by name, override MARI_EMBED_POOLING.
+    p = os.environ.get("MARI_EMBED_POOLING")
+    if p:
+        return p
+    return "last" if "qwen" in EMBED_MODEL.lower() else "mean"
+
+
 def do_embed(req):
     torch = _torch()
     tok, model = get_embed()
     texts = req.get("texts") or ([req["text"]] if req.get("text") else [])
     if not texts:
         return {"vectors": []}
+    pooling = _embed_pooling()
+    # Optional instruction prefix (Qwen embedders expect "Instruct: <task>\nQuery: <text>" on the
+    # query side; documents stay raw). Caller passes req["instruct"] for the query batch only.
+    instruct = req.get("instruct")
+    if instruct:
+        texts = [f"Instruct: {instruct}\nQuery: {t}" for t in texts]
+    max_len = int(os.environ.get("MARI_EMBED_MAXLEN", "512"))
     batch = int(os.environ.get("MARI_EMBED_BATCH", "32"))
     out = []
     with torch.no_grad():
         for i in range(0, len(texts), batch):
             chunk = texts[i:i + batch]
-            enc = tok(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512)
+            enc = tok(chunk, return_tensors="pt", padding=True, truncation=True, max_length=max_len)
             enc = {k: v.to(_device()) for k, v in enc.items()}
             hidden = model(**enc).last_hidden_state          # (B, T, H)
-            mask = enc["attention_mask"].unsqueeze(-1).float()  # (B, T, 1)
-            pooled = (hidden * mask).sum(1) / mask.sum(1).clamp(min=1e-9)  # mean pool
+            mask = enc["attention_mask"]
+            if pooling == "last":
+                # last non-pad token per row (works regardless of padding side)
+                idx = mask.sum(1) - 1                          # (B,)
+                pooled = hidden[torch.arange(hidden.shape[0]), idx]
+            else:
+                m = mask.unsqueeze(-1).float()
+                pooled = (hidden * m).sum(1) / m.sum(1).clamp(min=1e-9)
             pooled = torch.nn.functional.normalize(pooled.float(), p=2, dim=1)  # L2 unit vectors
             out.extend(pooled.cpu().tolist())
     return {"vectors": [[round(x, 6) for x in v] for v in out]}

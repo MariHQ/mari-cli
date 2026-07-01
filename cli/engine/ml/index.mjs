@@ -113,10 +113,10 @@ export async function perplexity(text) {
 
 // Sentence embeddings for code<->doc association. Returns an array of L2-normalized vectors
 // (one per input string), so cosine similarity is a plain dot product. Batched in the sidecar.
-export async function embed(texts) {
+export async function embed(texts, { instruct } = {}) {
   const arr = Array.isArray(texts) ? texts : [texts];
   if (!arr.length) return [];
-  const r = await request({ task: 'embed', texts: arr });
+  const r = await request({ task: 'embed', texts: arr, ...(instruct ? { instruct } : {}) });
   return r.vectors || [];
 }
 export function cosine(a, b) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
