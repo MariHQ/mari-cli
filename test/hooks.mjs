@@ -147,6 +147,27 @@ check('whole-file content has no fragment label', whole.findings.length > 0 && w
   check('claude payload keeps the PostToolUse contract', claudeOut.includes('hookSpecificOutput') && claudeOut.includes('PostToolUse'));
 }
 
+// semantic lineage → the hook injects an address-it-now prompt when a curated span drifts
+{
+  const { execFileSync } = await import('node:child_process');
+  const { writeFileSync, mkdtempSync, mkdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { addEdge } = await import('../cli/engine/lineage.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'mari-hook-lineage-'));
+  mkdirSync(join(dir, 'src')); mkdirSync(join(dir, 'docs'));
+  writeFileSync(join(dir, 'src/fee.mjs'), 'export function feeFor(order) {\n  return order.total * 0.03;\n}\n');
+  writeFileSync(join(dir, 'docs/fees.md'), 'The platform fee is 3% of the order total, computed by `feeFor`.\n');
+  await addEdge(dir, { src: { file: 'src/fee.mjs', start: 1, end: 3 }, dst: { file: 'docs/fees.md', start: 1, end: 1 }, rel: 'documents', by: 'human' });
+  const run = (payload) => execFileSync('node', ['skill/scripts/hook.mjs'], { input: JSON.stringify(payload), cwd: process.cwd(), encoding: 'utf8' });
+  const payload = { tool_name: 'Edit', tool_input: { file_path: join(dir, 'src/fee.mjs') }, cwd: dir };
+  check('untouched curated span → hook stays silent on lineage', !run(payload).includes('semantic lineage'));
+  writeFileSync(join(dir, 'src/fee.mjs'), 'export function feeFor(order) {\n  return order.total * 0.05;\n}\n');
+  const out = run(payload);
+  check('drifted curated span → hook injects the impact prompt', out.includes('semantic lineage') && out.includes('docs/fees.md:1-1'));
+  check('impact prompt tells the agent how to reconcile', out.includes('lineage stamp'));
+}
+
 // findings come with one-shot bad→good fix exemplars
 const rendered = await renderForAgent('x.md', [
   { line: 3, severity: 'warn', ruleId: 'bold-lead-in-list', message: '…' },

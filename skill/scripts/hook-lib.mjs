@@ -10,6 +10,7 @@ const CONFIG = new URL('../../cli/engine/config.mjs', import.meta.url);
 const I18N = new URL('../../cli/engine/i18n.mjs', import.meta.url);
 const GRAMMAR = new URL('../../cli/engine/grammar.mjs', import.meta.url);
 const ASSOC = new URL('../../cli/engine/assoc.mjs', import.meta.url);
+const LINEAGE = new URL('../../cli/engine/lineage.mjs', import.meta.url);
 
 // Optional grammar + mechanics pass (Harper WASM). Off unless hook.grammar / detector.grammar is
 // set. Opt-in because it loads an ~18 MB WASM blob; the deterministic path never touches it.
@@ -119,6 +120,34 @@ export async function assocNotice(fp, cwd) {
       if (lines.length >= 6) break;
     }
     return `🔗 Mari — \`${rel}\` was edited; semantically associated spans elsewhere — check if they need updating:\n${lines.join('\n')}`;
+  } catch { return null; }
+}
+
+// Semantic lineage (curated graph in .mari/lineage.duckdb). Unlike assocNotice's raw candidates,
+// these edges were CONFIRMED by a human/LLM — and we only fire when the curated span's content
+// actually changed (hash drift), so the notice means "a promise just broke, fix it now". Opens
+// the DB read-only (a concurrently running `mari lineage` CLI keeps the write lock).
+export async function lineageNotice(fp, cwd) {
+  try {
+    const { lineageExists, impactFor } = await import(LINEAGE);
+    if (!lineageExists(cwd)) return null;
+    const { loadConfig } = await import(CONFIG);
+    const config = safe(() => loadConfig(cwd), null);
+    if (config?.hook?.enabled === false || config?.hook?.lineage === false) return null;
+    const rel = relative(cwd, fp) || fp;
+    const { impacts, missing } = await impactFor(cwd, [rel]);
+    if (!impacts.length && !missing.length) return null;
+
+    const lines = [];
+    for (const i of impacts.slice(0, 6)) {
+      const counterpartText = (i.side === 'src' ? i.edge.dstText : i.edge.srcText).split('\n').slice(0, 4).join('\n      ').slice(0, 400);
+      lines.push(`  • edge #${i.edge.id} (${i.edge.rel}${i.edge.note ? ` — ${i.edge.note}` : ''}): your change to L${i.changed.start}-${i.changed.end} affects ${i.counterpart.file}:${i.counterpart.start}-${i.counterpart.end}, which currently says:\n      ${counterpartText}`);
+    }
+    for (const m of missing.slice(0, 3)) {
+      lines.push(`  • edge #${m.edge.id}: ${(m.side === 'src' ? m.edge.src : m.edge.dst).file} no longer exists — its counterpart may now be orphaned.`);
+    }
+    return `⛓ Mari semantic lineage — \`${rel}\` has curated links whose content just changed. Address the impact NOW, in this session:\n${lines.join('\n')}\n` +
+      `For each: open the counterpart, update it (or confirm no change is needed), then run \`mari lineage stamp ${rel}\` to record the new baseline. If a link is wrong, \`mari lineage reject <id> --by llm\`.`;
   } catch { return null; }
 }
 

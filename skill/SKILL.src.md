@@ -77,6 +77,13 @@ of ground truth — run it first so every edit is grounded in concrete findings,
     queries are ~5s and the index self-maintains from git (changed files re-embed, deleted
     files are revoked, automatically per query). Use it to locate the prose/code a task
     touches before editing.
+  - `lineage` → the curated semantic-lineage graph (code↔doc and doc↔doc span links in
+    `.mari/lineage.duckdb`). Load `skill/reference/lineage.md` — it has the full curation flow.
+    Short form: `node cli/bin/cli.js lineage propose` generates candidates, then YOU review
+    each one (`lineage review --json`), read both spans, and `confirm --rel <r> --by llm` or
+    `reject --by llm` — ask the user only about edges you're unsure of. Once curated, the
+    post-edit hook fires whenever a linked span's content changes, and you must address the
+    counterpart in the same session, then `lineage stamp <file>`.
   - `platform` → set up a docs-as-code site generator if the repo has none. Load
     `skill/reference/platform.md`. Run `node cli/bin/cli.js platform detect`. If nothing is set up,
     **ask the user which platform** (`platform list` shows the options). Then run

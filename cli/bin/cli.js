@@ -28,6 +28,8 @@ import { checkSite, communityAssets } from '../engine/site.mjs';
 import { extractSurface, renderSurface, chunkSurface, itemsOfSpan, SOURCE_EXT, NOT_SURFACE } from '../engine/surface.mjs';
 import { stripComments, CODE_EXT } from '../engine/comments.mjs';
 import { i18nAssociations, i18nConform } from '../engine/i18n.mjs';
+import { proposeEdges, assocProposals, listEdges, getEdge, curateEdges, addEdge, impactFor, stampEdges, setEdgeSpans, readSpan, lineageStats, lineageExists, RELATIONS } from '../engine/lineage.mjs';
+import { symbolProposals } from '../engine/symbols.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(HERE, '..', '..'); // cli/bin → package root, wherever mari is installed
@@ -38,7 +40,7 @@ const rest = argv.slice(1);
 
 // Value-taking options accept both `--opt=value` and `--opt value`. Listed so positionals()
 // can skip a space-form value and not mistake it for a positional argument.
-const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model', 'limit', 'paths', 'notify', 'exclude', 'name', 'claims', 'k']);
+const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model', 'limit', 'paths', 'notify', 'exclude', 'name', 'claims', 'k', 'rel', 'note', 'by', 'status', 'min-score', 'file']);
 function flag(name) { return rest.includes(`--${name}`); }
 function opt(name, def = null) {
   const eq = rest.find((a) => a.startsWith(`--${name}=`));
@@ -77,6 +79,7 @@ async function main() {
     case 'surface': return surface();
     case 'i18n': return i18n();
     case 'assoc': return await assocCmd();
+    case 'lineage': return await lineageCmd();
     case 'explore': return await explore();
     case 'live': return live();
     case undefined:
@@ -1223,6 +1226,217 @@ async function assocCmd() {
 }
 const toPosix = (p) => String(p).split(sep).join('/');
 
+// ─── mari lineage — curated semantic-lineage graph in embedded DuckDB ────────────────────────────
+// Candidates (assoc index + symbol mentions) land as 'proposed'; a human or LLM reviews each and
+// confirms/rejects with a relation label. Confirmed edges are a promise the two spans stay in
+// sync — `impact` reports the broken promises after an edit, and the post-edit hook injects them
+// into the working session.
+const LINEAGE_USAGE = `Usage:
+  mari lineage propose [--symbols|--assoc] [--min-score s]      Generate candidate edges → DuckDB (default: both sources)
+  mari lineage refine [--limit N] [--threshold t] [--id N…]     Attention: shrink coarse proposed spans to the lines that engage the counterpart (~6s/edge)
+  mari lineage review [--limit N] [--json]                      Next proposed edges with both spans, for curation
+  mari lineage show <id> [--json]                               One edge in full
+  mari lineage confirm <id…> [--rel r] [--note "…"] [--by llm|human]
+  mari lineage reject  <id…> [--note "…"] [--by llm|human]
+  mari lineage link <fileA:start-end> <fileB:start-end> [--rel r] [--note "…"] [--by …]   Assert an edge directly
+  mari lineage impact [file…] [--json]                          Confirmed edges broken by changes (default: git-dirty files)
+  mari lineage stamp [file…|--all] [--id N…]                    Reconcile: re-hash spans after the impact was addressed
+  mari lineage list [--status s] [--file f] [--json] | stats
+Relations: ${RELATIONS.join(' | ')}`;
+
+function parseSpanArg(root, s) {
+  const m = String(s).match(/^(.*?):(\d+)-(\d+)$/);
+  const file = m ? m[1] : s;
+  if (!existsSync(join(root, file))) return null;
+  const lineCount = readFileSync(join(root, file), 'utf8').split('\n').length;
+  const start = m ? +m[2] : 1, end = m ? +m[3] : lineCount;
+  return start >= 1 && end >= start ? { file: toPosix(file), start, end: Math.min(end, lineCount) } : null;
+}
+
+const edgeLine = (e) => `#${e.id} [${e.status}] ${e.src.file}:${e.src.start}-${e.src.end} —${e.rel}→ ${e.dst.file}:${e.dst.start}-${e.dst.end} (${e.via}${e.score != null ? ` ${e.score}` : ''}${e.src.symbol ? `, ${e.src.symbol}` : ''})`;
+const indented = (text, n = 6) => String(text).split('\n').slice(0, n).map((l) => '      ' + l.slice(0, 110)).join('\n');
+
+async function lineageCmd() {
+  const p = positionals();
+  const sub = p[0];
+  const root = process.cwd();
+
+  if (sub === 'propose') {
+    const wantSymbols = flag('symbols') || !flag('assoc');
+    const wantAssoc = flag('assoc') || !flag('symbols');
+    const proposals = [];
+    if (wantSymbols) {
+      const sp = symbolProposals(root);
+      console.error(`  · ${sp.length} symbol-mention candidate(s)`);
+      proposals.push(...sp);
+    }
+    if (wantAssoc) {
+      const index = loadAssoc(root);
+      if (index) {
+        const ap = assocProposals(index, { minScore: parseFloat(opt('min-score') || '0.4') });
+        console.error(`  · ${ap.length} assoc-index candidate(s) (via ${index.via})`);
+        proposals.push(...ap);
+      } else console.error('  · no assoc index — run `mari assoc build [--attn]` for embedding/attention candidates (symbol candidates still proposed).');
+    }
+    const inserted = await proposeEdges(root, proposals);
+    const stats = await lineageStats(root);
+    console.log(`✓ ${inserted} new proposal(s) (${proposals.length - inserted} already known) — ${stats?.total ?? 0} edge(s) total in .mari/lineage.duckdb`);
+    console.log('Next: `mari lineage review` and confirm/reject each edge.');
+    return;
+  }
+
+  // refine — the assoc index proposes fixed ~40-line RAG chunks (recall units, not promise
+  // units). For each side of an edge, run attention FOCUS with the counterpart as the query
+  // and shrink the span to where its attention mass actually lands. Proposed edges only —
+  // a curator approved a confirmed edge's extent as-is.
+  if (sub === 'refine') {
+    if (!attnReady()) { console.error('refine needs the native attention binary + a GGUF model (set MARI_ATTN_MODEL or drop one in ~/.mari/models).'); process.exit(2); }
+    const ids = p.slice(1).filter((x) => /^\d+$/.test(x)).map(Number);
+    const limit = Math.max(1, parseInt(opt('limit') || '12', 10) || 12);
+    const thr = parseFloat(opt('threshold') || '0.6');
+    let edges = ids.length
+      ? (await Promise.all(ids.map((id) => getEdge(root, id)))).filter((e) => e && e.status === 'proposed')
+      : (await listEdges(root, { status: 'proposed' })).filter((e) => e.via === 'embedding').slice(0, limit);
+    if (!edges.length) { console.log('Nothing to refine — no matching proposed edges.'); return; }
+    console.error(`(refining ${edges.length} edge(s) with attention focus — ~3s per side)`);
+    const tmp = join(tmpdir(), 'mari-lineage'); mkdirSync(tmp, { recursive: true });
+
+    // Focus one side: context = this side's span, query = the other side's span. Returns the
+    // narrowed span or null (attention spread evenly / too small to bother).
+    const focusSide = (edge, side) => {
+      const span = edge[side], other = side === 'src' ? edge.dst : edge.src;
+      if (span.end - span.start < 8) return null; // already tight
+      const spanText = readSpan(root, span.file, span.start, span.end);
+      const otherText = readSpan(root, other.file, other.start, other.end);
+      if (!spanText || !otherText) return null;
+      const ext = (f) => f.split('.').pop() || 'md';
+      const cf = join(tmp, `ctx.${ext(span.file)}`), qf = join(tmp, `qry.${ext(other.file)}`);
+      const strip = (t, f) => (CODE_EXT.test(f) ? stripComments(t, f) : t);
+      writeFileSync(cf, strip(spanText, span.file)); writeFileSync(qf, strip(otherText, other.file));
+      const res = runMariAttn(cf, qf, { mode: 'focus', threshold: thr, querySegment: 'sentence' });
+      if (res.error) return null;
+      const regions = (res.out.flagged || []).sort((a, b) => b.score - a.score).slice(0, 3);
+      if (!regions.length) return null;
+      const stripped = strip(spanText, span.file);
+      const rel = regions.map((r) => lineOfSpan(stripped, r.text)).filter(Boolean);
+      if (!rel.length) return null;
+      const s = span.start + Math.min(...rel) - 2, e = span.start + Math.max(...rel) + 1; // ±1 line of context
+      const next = { start: Math.max(span.start, s), end: Math.min(span.end, e) };
+      return next.end - next.start < span.end - span.start ? next : null; // only ever narrows
+    };
+
+    for (const edge of edges) {
+      const src = focusSide(edge, 'src');
+      const dst = focusSide(edge, 'dst');
+      if (!src && !dst) { console.log(`#${edge.id}: attention spread evenly — spans kept`); continue; }
+      await setEdgeSpans(root, edge.id, { src, dst });
+      const show = (side, next) => next ? `${side} ${edge[side].start}-${edge[side].end} → ${next.start}-${next.end}` : null;
+      console.log(`#${edge.id}: ${[show('src', src), show('dst', dst)].filter(Boolean).join(' · ')}`);
+    }
+    console.log('\nRefined spans are what review shows and what curation hashes. Next: `mari lineage review`.');
+    return;
+  }
+
+  if (sub === 'review') {
+    const limit = Math.max(1, parseInt(opt('limit') || '10', 10) || 10);
+    const edges = await listEdges(root, { status: 'proposed', limit });
+    if (flag('json')) { console.log(JSON.stringify(edges, null, 2)); return; }
+    if (!edges.length) { console.log('No proposed edges. Run `mari lineage propose` (and `mari assoc build` first for semantic candidates).'); return; }
+    for (const e of edges) {
+      console.log(`\n${edgeLine(e)}`);
+      console.log(`  src ─ ${e.src.file}:${e.src.start}\n${indented(e.srcText)}`);
+      console.log(`  dst ─ ${e.dst.file}:${e.dst.start}\n${indented(e.dstText)}`);
+    }
+    console.log(`\nCurate: mari lineage confirm <id> [--rel ${RELATIONS.join('|')}] | reject <id>  (--by llm|human, --note "…")`);
+    return;
+  }
+
+  if (sub === 'show') {
+    const e = p[1] && await getEdge(root, p[1]);
+    if (!e) { console.error('Usage: mari lineage show <id>'); process.exit(2); }
+    if (flag('json')) { console.log(JSON.stringify(e, null, 2)); return; }
+    console.log(edgeLine(e));
+    if (e.note) console.log(`  note: ${e.note}${e.curatedBy ? `  (by ${e.curatedBy})` : ''}`);
+    console.log(`  src ─ ${e.src.file}:${e.src.start}-${e.src.end}\n${indented(e.srcText, 20)}`);
+    console.log(`  dst ─ ${e.dst.file}:${e.dst.start}-${e.dst.end}\n${indented(e.dstText, 20)}`);
+    return;
+  }
+
+  if (sub === 'confirm' || sub === 'reject') {
+    const ids = p.slice(1).filter((x) => /^\d+$/.test(x));
+    if (!ids.length) { console.error(`Usage: mari lineage ${sub} <id…>`); process.exit(2); }
+    const rel = opt('rel');
+    if (rel && !RELATIONS.includes(rel)) { console.error(`--rel must be one of: ${RELATIONS.join(', ')}`); process.exit(2); }
+    const n = await curateEdges(root, ids, { status: sub === 'confirm' ? 'confirmed' : 'rejected', rel, note: opt('note'), by: opt('by') });
+    console.log(`✓ ${n} edge(s) ${sub}ed.`);
+    return;
+  }
+
+  if (sub === 'link') {
+    const src = p[1] && parseSpanArg(root, p[1]);
+    const dst = p[2] && parseSpanArg(root, p[2]);
+    if (!src || !dst) { console.error('Usage: mari lineage link <fileA:start-end> <fileB:start-end> [--rel r] — spans must exist'); process.exit(2); }
+    const rel = opt('rel') || 'related';
+    if (!RELATIONS.includes(rel)) { console.error(`--rel must be one of: ${RELATIONS.join(', ')}`); process.exit(2); }
+    const id = await addEdge(root, { src, dst, rel, note: opt('note'), by: opt('by') || 'human' });
+    console.log(`✓ edge #${id} confirmed: ${src.file}:${src.start}-${src.end} —${rel}→ ${dst.file}:${dst.start}-${dst.end}`);
+    return;
+  }
+
+  if (sub === 'impact') {
+    if (!lineageExists(root)) { console.error('No lineage graph yet — run `mari lineage propose`, then curate.'); process.exit(2); }
+    let files = p.slice(1).map((f) => toPosix(relative(root, f) || f));
+    if (!files.length) {
+      const g = gitCandidates(root, null);
+      files = [...new Set([...(g?.modified || []), ...(g?.deleted || [])])];
+      if (!files.length) { console.log('Working tree is clean — pass files explicitly to check a hypothetical change.'); return; }
+    }
+    const { impacts, moved, missing } = await impactFor(root, files);
+    if (flag('json')) { console.log(JSON.stringify({ files, impacts, moved: moved.map((m) => ({ id: m.edge.id, side: m.side, at: m.at })), missing: missing.map((m) => ({ id: m.edge.id, side: m.side })) }, null, 2)); return; }
+    if (!impacts.length && !missing.length) {
+      console.log(`✓ no lineage impact from ${files.length} changed file(s).${moved.length ? ` ${moved.length} span(s) moved — \`mari lineage stamp\` re-anchors them.` : ''}`);
+      return;
+    }
+    console.log(`⚠ ${impacts.length} impacted edge(s) from ${files.length} changed file(s):`);
+    for (const i of impacts) {
+      console.log(`\n${edgeLine(i.edge)}`);
+      console.log(`  changed: ${i.changed.file}:${i.changed.start}-${i.changed.end} → review ${i.counterpart.file}:${i.counterpart.start}-${i.counterpart.end}`);
+      console.log(`  counterpart says:\n${indented(i.side === 'src' ? i.edge.dstText : i.edge.srcText)}`);
+    }
+    for (const m of missing) console.log(`\n#${m.edge.id}: ${m.side === 'src' ? m.edge.src.file : m.edge.dst.file} is GONE — its counterpart may be orphaned; re-curate or reject the edge.`);
+    console.log('\nAfter updating the counterparts: `mari lineage stamp <files…>` records the new baseline.');
+    return;
+  }
+
+  if (sub === 'stamp') {
+    const ids = (opt('id') ? [opt('id')] : []).concat(p.slice(1).filter((x) => /^\d+$/.test(x)));
+    const files = flag('all') ? null : p.slice(1).filter((x) => !/^\d+$/.test(x)).map((f) => toPosix(relative(root, f) || f));
+    if (!flag('all') && !ids.length && !files.length) { console.error('Usage: mari lineage stamp <file…> | --all | --id N'); process.exit(2); }
+    const n = await stampEdges(root, ids.length ? { ids } : (flag('all') ? {} : { files }));
+    console.log(`✓ ${n} edge(s) re-stamped to current content.`);
+    return;
+  }
+
+  if (sub === 'list') {
+    const edges = await listEdges(root, { status: opt('status'), file: opt('file') ? toPosix(relative(root, opt('file')) || opt('file')) : null });
+    if (flag('json')) { console.log(JSON.stringify(edges, null, 2)); return; }
+    if (!edges.length) { console.log('No edges match.'); return; }
+    for (const e of edges.slice(0, 80)) console.log(edgeLine(e));
+    if (edges.length > 80) console.log(`… and ${edges.length - 80} more (use --json).`);
+    return;
+  }
+
+  if (sub === 'stats') {
+    const s = await lineageStats(root);
+    if (!s) { console.log('No lineage graph yet — run `mari lineage propose`.'); return; }
+    console.log(`${s.total} edge(s) in .mari/lineage.duckdb:`);
+    for (const r of s.rows) console.log(`  ${r.status.padEnd(9)} via ${String(r.via).padEnd(9)} ${r.n}`);
+    return;
+  }
+
+  console.error(LINEAGE_USAGE); process.exit(2);
+}
+
 // ─── mari explore — RAG + attention over the repo ─────────────────────────────────────────────
 // One command to ask a repo anything: embed the query, vector-search the Lance chunk store
 // (built automatically on first use), print the top chunks with file:line + snippet. `--deep`
@@ -1561,6 +1775,11 @@ Usage:
                         A file argument explores from that file's whole content (mean of its chunk embeddings). --deep reranks hits by attention — the fraction of each chunk that
                         engages the query (~3s each; stricter --threshold spreads the scores). The attention window sizes itself to the inputs (cap: MARI_ATTN_CTX, default 32768).
                         First run builds the vector index automatically; afterwards it self-maintains from git.
+  mari lineage propose | review | confirm <id…> | reject <id…> | link <a:1-9> <b:1-9> | impact [file…] | stamp | list | stats
+                        Semantic lineage: curated span↔span graph (code↔doc, doc↔doc) in embedded DuckDB (.mari/lineage.duckdb).
+                        propose turns assoc-index + symbol-mention candidates into proposals; a human/LLM confirms or rejects each
+                        (that's the knowledge graph); impact lists confirmed edges whose curated span actually changed — the
+                        post-edit hook injects these into the session so the agent addresses them immediately.
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut

@@ -21,6 +21,7 @@ const SUITES = [
   'site.mjs',
   'surface.mjs',
   'assoc.mjs',
+  'lineage.mjs',
 ];
 
 const results = [];

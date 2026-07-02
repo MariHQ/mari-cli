@@ -10,7 +10,7 @@
 //
 // CONTRACT: never break the turn. Every path exits 0; on any failure we emit nothing.
 
-import { readStdin, editedFile, targetFile, lint, renderForAgent, i18nNote, rulesNotice, assocNotice, safe } from './hook-lib.mjs';
+import { readStdin, editedFile, targetFile, lint, renderForAgent, i18nNote, rulesNotice, assocNotice, lineageNotice, safe } from './hook-lib.mjs';
 
 const QUIET_DEFAULT = true;
 const PROVIDER = (process.argv.find((a) => a.startsWith('--provider='))?.split('=')[1]
@@ -48,9 +48,17 @@ const PROVIDER = (process.argv.find((a) => a.startsWith('--provider='))?.split('
     const notice = await safeAsync(() => rulesNotice(fp, cwd));
     if (notice) parts.push(notice);
 
-    // (3) Derived code<->doc associations — remind the agent to check the linked counterpart.
-    const assoc = await safeAsync(() => assocNotice(fp, cwd));
-    if (assoc) parts.push(assoc);
+    // (3) Curated semantic lineage — a confirmed edge's span changed; the agent must address
+    // the counterpart in this session. Takes precedence over raw assoc candidates: when a
+    // curated edge fires, the uncurated reminders for the same file are noise.
+    const lineage = await safeAsync(() => lineageNotice(fp, cwd));
+    if (lineage) parts.push(lineage);
+
+    // (4) Derived code<->doc associations — remind the agent to check the linked counterpart.
+    if (!lineage) {
+      const assoc = await safeAsync(() => assocNotice(fp, cwd));
+      if (assoc) parts.push(assoc);
+    }
 
     if (parts.length) emit(parts.join('\n\n'));
     done();

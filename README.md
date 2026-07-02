@@ -391,6 +391,43 @@ moved, so a dirty-but-identical file costs nothing. Non-git repos fall back to a
 `mari assoc update` runs the same sync explicitly; `mari explore --build` forces a full rebuild,
 and a changed embedding model triggers one automatically (mixed vector spaces are never reused).
 
+## Semantic lineage (curated code↔doc graph + impact analysis)
+
+Association candidates are cheap; *promises* are curated. Semantic lineage turns the machine's
+candidates into a knowledge graph a human or LLM has vouched for, stored in an embedded DuckDB
+at `.mari/lineage.duckdb` — commit it; the curation is judgment, not derivable state:
+
+```bash
+npx mari lineage propose            # candidates → DB: symbol mentions + the assoc index
+npx mari lineage refine --limit 20  # attention shrinks coarse RAG-chunk spans to the engaging lines
+npx mari lineage review             # each proposal with both spans, for curation
+npx mari lineage confirm 42 --rel documents --by llm --note "README documents detect's exit codes"
+npx mari lineage reject 43 --by llm --note "vocabulary coincidence"
+npx mari lineage link src/fees.mjs:10-24 docs/fees.md:5-12 --rel documents --by human
+```
+
+Two candidate sources: **symbol mentions** (exported functions/classes named in docs —
+definition-bounded code spans, paragraph-bounded doc spans, no models) and the **assoc index**
+(embedding/attention associations from `mari assoc build`). Every candidate lands `proposed`;
+the `/mari lineage` skill flow has the agent read both spans of each edge and confirm with a
+relation (`documents`, `implements`, `describes`, `duplicates`, `derives-from`, `related`) or
+reject with a reason. Rejected pairs never resurface. `refine` is the attention pass: with the
+counterpart as the query, it narrows each side of an embedding edge to the lines where the
+attention mass actually lands — promise units, not the retrieval chunks RAG needed.
+
+A confirmed edge is a promise the two spans stay in sync, and the post-edit hook enforces it.
+Each span carries a normalized content hash: whitespace churn and line movement (re-anchored by
+a sliding-window search) don't fire — only real drift does. When you edit a curated span, the
+hook injects the impact into the agent's turn — the counterpart's location, what it currently
+says, and the reconcile step — so the agent fixes the other side *in the same session*, then
+records the new baseline:
+
+```bash
+npx mari lineage impact             # broken promises among git-dirty files (or name files)
+npx mari lineage stamp src/fees.mjs # after reviewing counterparts: re-hash to the new baseline
+npx mari lineage list --status confirmed | stats
+```
+
 ## Localized docs (i18n)
 
 When a doc has translations, editing the source should remind you the translations are now
