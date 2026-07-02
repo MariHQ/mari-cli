@@ -14,6 +14,7 @@ check('mkdocs.yml → mkdocs', idsOf(['README.md', 'mkdocs.yml']).includes('mkdo
 check('mkdocs.yaml also matches', idsOf(['mkdocs.yaml']).includes('mkdocs'));
 check('docusaurus at root', idsOf(['docusaurus.config.js']).includes('docusaurus'));
 check('docusaurus under website/', idsOf(['website/docusaurus.config.ts']).includes('docusaurus'));
+check('docusaurus under docs/', idsOf(['docs/docusaurus.config.js']).includes('docusaurus'));
 check('sphinx conf.py under docs/', idsOf(['docs/conf.py']).includes('sphinx'));
 check('hugo.toml → hugo', idsOf(['hugo.toml']).includes('hugo'));
 check('_config.yml → jekyll', idsOf(['_config.yml']).includes('jekyll'));

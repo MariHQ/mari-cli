@@ -74,7 +74,9 @@ export function slugify(heading) {
   return String(heading).toLowerCase().trim()
     .replace(/<[^>]*>/g, '')            // inline HTML
     .replace(/[!(),.:;'"`’“”?[\]{}\\/|@#$%^&*+=~<>]+/g, '')
-    .replace(/\s+/g, '-');
+    // GitHub maps EACH space to a hyphen without collapsing runs — "`A` / `B`" (punctuation
+    // stripped, two spaces left) becomes a--b, not a-b.
+    .replace(/\s/g, '-');
 }
 
 // The set of anchors a page exposes: ATX heading slugs (with duplicate suffixes), explicit
@@ -83,8 +85,13 @@ export function anchorsOf(text) {
   const masked = maskCode(text);
   const anchors = new Set();
   const counts = new Map();
-  for (const m of masked.matchAll(/^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm)) {
-    let title = m[1];
+  // Find heading POSITIONS in the masked text (so headings inside code fences don't count),
+  // but slugify the ORIGINAL text — masking blanks inline code, and "# `LICENSE`" must slug
+  // from its real characters.
+  for (const m of masked.matchAll(/^#{1,6}[ \t]+(?:.+?)[ \t]*#*[ \t]*$/gm)) {
+    const orig = String(text).slice(m.index, m.index + m[0].length);
+    let title = (orig.match(/^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/) || [null, ''])[1];
+    if (!title) continue;
     const custom = title.match(/\{#([^}\s]+)\}\s*$/);
     if (custom) { anchors.add(custom[1]); title = title.slice(0, custom.index); }
     const base = slugify(title.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')); // slug of the link text, not the URL

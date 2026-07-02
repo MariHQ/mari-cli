@@ -29,12 +29,18 @@ check('masking preserves offsets', maskCode('ab\n```\ncode\n```\nz').length === 
 
 // --- slugify / anchorsOf ---
 check('slugify matches GitHub style', slugify('Hello, World! (v2)') === 'hello-world-v2');
+check('slugify keeps a hyphen per space (no collapsing)', slugify('`COPYRIGHT` / `LICENSE`') === 'copyright--license');
 {
   const a = anchorsOf('# Setup\n\n## Setup\n\n## With `code` + stuff {#custom-id}\n\n<a name="html-anchor"></a>\n');
   check('heading slug present', a.has('setup'));
   check('duplicate heading gets -1 suffix', a.has('setup-1'));
   check('custom {#id} attribute registered', a.has('custom-id'));
   check('html anchor registered', a.has('html-anchor'));
+}
+{
+  const a = anchorsOf('# `COPYRIGHT` / `LICENSE`\n\n```\n# not a heading\n```\n');
+  check('inline-code heading slugs from real text', a.has('copyright--license'));
+  check('headings inside code fences are not anchors', !a.has('not-a-heading'));
 }
 
 // --- resolveLink ---

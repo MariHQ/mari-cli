@@ -31,8 +31,8 @@ export const PLATFORMS = [
     lang: 'Node.js',
     site: 'https://docusaurus.io',
     build: 'npm install && npm run start',
-    // Config can sit at the repo root or under website/.
-    detect: [/^(website\/)?docusaurus\.config\.(js|ts|mjs|cjs)$/i],
+    // Config can sit at the repo root or under website/ or docs/ (Marquez-style).
+    detect: [/^((website|docs)\/)?docusaurus\.config\.(js|ts|mjs|cjs)$/i],
     files: docusaurusFiles,
   },
   {

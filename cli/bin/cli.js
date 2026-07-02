@@ -871,9 +871,12 @@ function deepDocsPass(root, files, pages) {
   const fsurf = surfaceFiles(root, files);
   if (!fsurf.length) { console.log('\n--deep: no public surface extracted (JS/TS, Python, Go, Rust) — skipping the attention pass.'); return; }
   // Nav/community/meta files aren't API prose; Mari's own convention files (PRODUCT/STYLE/FACTS)
-  // describe voice and facts, not the surface. Docs-root pages and the README go first so a
-  // --limit'ed grounding pass spends its budget on the pages readers actually use.
-  const NOT_API_DOC = /(^|\/)(_sidebar|_navbar|_coverpage|SUMMARY|CHANGELOG|CODE_OF_CONDUCT|LICENSE|GOVERNANCE|PRODUCT|STYLE|FACTS)\.(md|mdx|markdown)$/i;
+  // describe voice and facts, not the surface. Blogs/changelogs are temporal — they describe a
+  // past release and are EXPECTED to drift from today's surface. Generated OpenAPI pages
+  // (*.api.mdx, docusaurus-plugin-openapi-docs) are JSX renderings of the spec, not prose.
+  // Docs-root pages and the README go first so a --limit'ed grounding pass spends its budget
+  // on the pages readers actually use.
+  const NOT_API_DOC = /(^|\/)(_sidebar|_navbar|_coverpage|SUMMARY|CHANGELOG|CODE_OF_CONDUCT|LICENSE|GOVERNANCE|PRODUCT|STYLE|FACTS)\.(md|mdx|markdown)$|(^|\/)(blog|news|_posts)\/|\.api\.mdx$/i;
   const docRank = (p) => (/^docs?\//i.test(p) ? 0 : /^readme\./i.test(p) ? 1 : 2);
   const docs = pages
     .filter((pg) => /\.(md|mdx|markdown)$/i.test(pg.path) && !NOT_API_DOC.test(pg.path))
@@ -888,11 +891,13 @@ function deepDocsPass(root, files, pages) {
   console.log('\nDocs coverage of the public surface (attention):');
   const chunks = chunkSurface(fsurf);
   const undocumented = new Map(); // file+name → { file, line, name, score }
+  let covered = 0;
   for (const [i, chunk] of chunks.entries()) {
     const cf = join(tmp, `surface-${i}.txt`);
     writeFileSync(cf, chunk.text);
     const res = runMariAttn(cf, docsFile, { grounding: false, threshold: thr });
     if (res.error) { console.log(`  · surface chunk ${i + 1}/${chunks.length} skipped: ${res.error}`); continue; }
+    covered++;
     for (const f of res.out.flagged || []) {
       for (const it of itemsOfSpan(chunk, f.text)) {
         const k = `${it.file}|${it.name}`;
@@ -900,7 +905,8 @@ function deepDocsPass(root, files, pages) {
       }
     }
   }
-  if (!undocumented.size) console.log('  ✓ every extracted symbol is engaged by the docs');
+  if (!covered) console.log('  · coverage did not run (every chunk skipped) — nothing verified');
+  else if (!undocumented.size) console.log('  ✓ every extracted symbol is engaged by the docs');
   else {
     const list = [...undocumented.values()].sort((a, b) => a.score - b.score);
     for (const u of list) console.log(`  ⚠ ${(u.score * 100).toFixed(0)}%  ${u.file} L${u.line}  ${u.name}`);
@@ -980,15 +986,23 @@ function attnModel() {
   _attnModelCache = (m && existsSync(m)) ? m : null;
   return _attnModelCache;
 }
-function runMariAttn(ctxFile, qryFile, { grounding = false, threshold = 0.3, querySegment = 'paragraph' } = {}) {
+function runMariAttn(ctxFile, qryFile, { grounding = false, threshold = 0.3, querySegment = 'paragraph', ctxSize = 4096 } = {}) {
   const bin = mariAttnBin();
   const model = attnModel();
   if (!existsSync(bin)) return { error: `attention binary not shipped for ${process.platform}-${process.arch}; set MARI_ATTN_BIN or build native/attn (see native/attn/README.md).` };
   if (!model || !existsSync(model)) return { error: 'set MARI_ATTN_MODEL (or attn.model in .mari/config.json) to a multilingual GGUF model.' };
-  const r = spawnSync(bin, ['--model', model, '--context', ctxFile, '--query', qryFile,
+  const run = (size) => spawnSync(bin, ['--model', model, '--context', ctxFile, '--query', qryFile,
     '--query-glob', extname(qryFile).slice(1) || 'md', grounding ? '--mari-grounding' : '--mari-coverage',
     '--context-segment', 'phrase', '--phrase-tokens', '10', '--query-segment', querySegment,
-    '--ctx-size', '4096', '--mari-threshold', String(threshold)], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    '--ctx-size', String(size), '--mari-threshold', String(threshold)], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  let r = run(ctxSize);
+  if (r.status !== 0) {
+    // The extractor knows the size it needed ("use --ctx-size N or more") — retry once with it,
+    // capped so a pathological input can't balloon memory.
+    const want = (r.stderr || '').match(/use --ctx-size (\d+)/);
+    const next = want ? Math.min(parseInt(want[1], 10), 32768) : 0;
+    if (next > ctxSize) r = run(next);
+  }
   if (r.status !== 0) return { error: `extractor failed: ${(r.stderr || '').trim().split('\n').pop()}` };
   try { return { out: JSON.parse((r.stdout || '').trim().split('\n').filter(Boolean).pop()) }; }
   catch { return { error: 'could not parse extractor output' }; }
