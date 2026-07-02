@@ -219,7 +219,7 @@ The base style guide selects which conformance rules fire. Mari ships full rule 
 
 By default, `detect` respects the same `.mari/config.json` and `.mari/config.local.json` detector config as the hook: `detector.ignoreRules`, `detector.ignoreFiles`, `detector.ignoreValues`, and `detector.styleGuide`.
 
-For a waiver that should travel with one file instead of the repo config, add an inline comment: `<!-- mari-disable overused-word: quoting a primary source -->`. The marker works in any comment syntax, scopes to the whole file (or one line with `mari-disable-line` / `mari-disable-next-line`), and is bypassed by `--no-inline-ignores` or `--no-config`.
+All waivers live in that JSON config — there are no inline in-file comments. Silence a rule with `mari ignores add-rule <id>`, skip whole files with `mari ignores add-file <glob>`, or allow a specific term with `mari ignores add-value <rule> <value>` (each writes `.mari/config.json`; `--no-config` bypasses them for a run).
 
 Full detector docs: [mari.style/docs/detector](https://mari.style/docs/detector).
 
@@ -241,12 +241,11 @@ your text and your facts (the wrong-number tell), then a small local NLI model (
 default) labels each claim **Supported / Contradicted / Unsupported** with the evidence line
 attached. A contradiction is an error; an unsupported claim is advisory (absence isn't disproof).
 Two **opt-in** generative tiers go deeper. `--decompose` breaks each sentence into atomic claims
-so one bad clause in a true sentence is caught; claim extraction is delegated to Claude (the live
-session when Mari runs as a plugin, otherwise the `claude` CLI) rather than a bundled model — the
-orchestrating model already does this far better than a tiny local instruct LM would. Each atomic
-claim is then checked by the local NLI model. `--ground=attention` runs an on-device Lookback-Lens
-pass (Qwen3-0.6B, downloads once and caches) that flags spans the model never attended to your
-facts for.
+so one bad clause in a true sentence is caught; the splitting is done by Claude in-session via the
+`/mari` skill (the CLI never bundles a model or calls `claude` for it), and each atomic claim is
+then checked by the local NLI model. `--ground=attention` runs an on-device Lookback-Lens pass
+(Qwen3-0.6B, downloads once and caches) that flags spans the model never attended to your facts
+for.
 
 mari never claims a document "is AI-written." Detectors are biased, and that's not the goal.
 It points at spans worth rewriting and claims worth verifying.

@@ -199,7 +199,7 @@ export async function renderForAgent(rel, findings, max = 10) {
   return `Mari — ${rel}: ${findings.length} findings ` +
     `(${counts.error} error, ${counts.warn} warn, ${counts.advisory} advisory). Consider fixing before continuing.\n` +
     lines.join('\n') + more + fixBlock +
-    `\n\nWaive a rule inline: <!-- mari-disable <rule-id>: reason -->`;
+    `\n\nWaive a rule: mari ignores add-rule <rule-id> (or add-file <glob> / add-value <rule> <value>) — writes .mari/config.json`;
 }
 
 // When the edited file belongs to a localized set, remind the agent which translations may now

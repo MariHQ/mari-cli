@@ -8,7 +8,7 @@ import { detectText } from '../cli/engine/index.mjs';
 let pass = 0, fail = 0;
 const check = (name, cond) => { if (cond) pass++; else { fail++; console.log('  ✗ ' + name); } };
 
-const cfg = { config: { ignoreRules: new Set(), ignoreValues: {}, ignoreFiles: [], styleGuide: 'microsoft' }, useInlineIgnores: true };
+const cfg = { config: { ignoreRules: new Set(), ignoreValues: {}, ignoreFiles: [], styleGuide: 'microsoft' } };
 const lint = (src, lang) => detectText(maskSource(src, lang), cfg);
 const rules = (src, lang) => lint(src, lang).map((f) => f.ruleId);
 

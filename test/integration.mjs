@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { detectText, looksLikeData, isNonEnglishLocale, isGeneratedFile, isSkippedDir } from '../cli/engine/index.mjs';
 import { scoreDocument } from '../cli/engine/score.mjs';
-import { globToRe, deepMerge, parseInlineWaivers } from '../cli/engine/config.mjs';
+import { globToRe, deepMerge } from '../cli/engine/config.mjs';
 import { syllables, gradeLevel } from '../cli/engine/readability.mjs';
 
 const cfg = (pack) => ({ config: { ignoreRules: new Set(), ignoreValues: {}, ignoreFiles: [], styleGuide: pack || 'microsoft' }, useInlineIgnores: true });
@@ -47,11 +47,6 @@ check('AP/Chicago pack rules silent under microsoft', (() => {
   const r = rules('The release closed 9 issues, tests, and code.', 'microsoft');
   return !r.includes('ap-number-style') && !r.includes('ap-serial-comma') && !r.includes('chicago-number-style');
 })());
-
-// 5. Inline waiver suppresses on its line only.
-const waived = detectText('We utilize it. <!-- mari-disable-line complex-word -->\nWe utilize it again.', cfg());
-check('inline waiver: only the unwaived line flags complex-word',
-  waived.filter((f) => f.ruleId === 'complex-word').length === 1);
 
 // 6. Slop score: sloppy ranks well above clean, and clean lands in the 'clean' band.
 const cleanText = 'The cat sat on the mat. The dog ran outside. We shipped the build today.';
@@ -104,12 +99,6 @@ check('violent-metaphor no longer flags "hit"', !ruleset('Check for a cache hit 
 check('violent-metaphor still flags "abort"', ruleset('Abort the running job immediately.').includes('violent-tech-metaphor'));
 
 // 12. Review-findings regressions (B-series, CLI core).
-check('mari-disable (bare) waives every rule',
-  detectText('We utilize it.\n<!-- mari-disable -->', cfg()).length === 0);
-check('mari-disable rule-a, rule-b waives exactly those rules', (() => {
-  const w = parseInlineWaivers('<!-- mari-disable rule-a, rule-b -->');
-  return w.fileWide.has('rule-a') && w.fileWide.has('rule-b') && !w.fileWide.has('*');
-})());
 check('deepMerge: local config null overrides without throwing',
   deepMerge({ detector: { x: 1 } }, { detector: null }).detector === null);
 check('glob **/*.md matches root-level README.md', globToRe('**/*.md').test('README.md'));

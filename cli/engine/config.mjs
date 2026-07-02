@@ -1,5 +1,5 @@
-// Config loading (.mari/config.json + .local) and inline waivers
-// (<!-- mari-disable <id>: reason -->, -line / -next-line variants).
+// Config loading (.mari/config.json + .local). All waivers live in the JSON config
+// (ignoreRules / ignoreFiles / ignoreValues) — there are no inline in-file waivers.
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -82,28 +82,3 @@ export function matchRules(relPath, rules) {
   });
 }
 
-// Inline waivers → { fileWide: Set<ruleId|'*'>, lines: Map<lineNo, Set<ruleId|'*'>> }
-export function parseInlineWaivers(text) {
-  const fileWide = new Set();
-  const lines = new Map();
-  const all = text.split('\n');
-  // Rule ids are optional: `<!-- mari-disable -->` waives everything ('*'). The (?!-->) guard
-  // keeps the id capture from swallowing the comment's closing `-->`.
-  const re = /mari-disable(-line|-next-line)?(?:\s+((?:(?!-->)[^:>])+?))?\s*(?::[^>]*)?(?=\s*(?:--)?>|$)/i;
-  for (let i = 0; i < all.length; i++) {
-    const m = all[i].match(re);
-    if (!m) continue;
-    const ids = (m[2] || '').trim() === '' ? ['*'] : m[2].trim().split(/[\s,]+/);
-    const add = (ln) => { if (!lines.has(ln)) lines.set(ln, new Set()); ids.forEach((id) => lines.get(ln).add(id)); };
-    if (m[1] === '-line') add(i + 1);
-    else if (m[1] === '-next-line') add(i + 2);
-    else ids.forEach((id) => fileWide.add(id));
-  }
-  return { fileWide, lines };
-}
-
-export function waived(waivers, ruleId, line) {
-  if (waivers.fileWide.has('*') || waivers.fileWide.has(ruleId)) return true;
-  const s = waivers.lines.get(line);
-  return !!s && (s.has('*') || s.has(ruleId));
-}

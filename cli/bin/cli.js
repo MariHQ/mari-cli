@@ -17,7 +17,7 @@ import { renderHuman, renderJSON, renderSummary, summarize } from '../engine/fin
 import { parseFacts, factcheck, factcheckNLI, factcheckDecomposed, factcheckLookback, claimTargets, sortFindings } from '../engine/grounding.mjs';
 import { scoreDocument, renderScore } from '../engine/score.mjs';
 import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, lookbackGrounding, mlSlopFindings, embed } from '../engine/ml/index.mjs';
-import { claudeDecomposeBatch, claudeCliAvailable, loadClaimsFile, insideClaudeSession } from '../engine/decompose.mjs';
+import { loadClaimsFile } from '../engine/decompose.mjs';
 import { buildAssoc, loadAssoc, saveAssoc, associationsForFile, assocDir } from '../engine/assoc.mjs';
 import { tmpdir } from 'node:os';
 import { segment } from '../engine/segment.mjs';
@@ -91,7 +91,6 @@ async function detect() {
   const asJson = flag('json');
   const quiet = flag('quiet');
   const strict = flag('strict');
-  const useInline = !flag('no-inline-ignores') && useConfig;
 
   const wantScore = flag('score');
   const useModels = flag('models') || modelsEnabled();
@@ -101,7 +100,7 @@ async function detect() {
   let results;
   if (flag('stdin')) {
     const text = readFileSync(0, 'utf8');
-    results = [{ file: '<stdin>', findings: detectText(text, { config, useInlineIgnores: useInline }), text }];
+    results = [{ file: '<stdin>', findings: detectText(text, { config }), text }];
   } else {
     const targets = positionals();
     if (!targets.length) targets.push('.');
@@ -111,7 +110,7 @@ async function detect() {
       if (statSync(t).isFile() && !PROSE_EXT.has(extname(t).toLowerCase())) {
         console.error(`Note: Mari reads markdown only (.md, .markdown, .mdx, .mdc); skipping ${t}.`);
       }
-      results.push(...detectTarget(t, { config, root, useInlineIgnores: useInline, lintSource }));
+      results.push(...detectTarget(t, { config, root, lintSource }));
     }
   }
 
@@ -513,22 +512,17 @@ async function runFactcheck() {
     // attention model. Decomposition itself is done by Claude, never a sidecar model.
     if (!capabilities().available) { console.error('Mari ML sidecar unavailable: no Python venv (.venv) or ml/mari_ml.py. Run: python3.12 -m venv .venv && .venv/bin/pip install -r ml/requirements.txt'); process.exit(2); }
 
-    // Resolve where atomic claims come from. Order: an explicit --claims file (the skill path —
-    // Claude already decomposed in-session, no spawn) → standalone `claude -p` (top-level, only
-    // when NOT inside a session) → otherwise fall back to whole-sentence NLI (decompose = null).
+    // Atomic claims come only from a --claims file: the mari skill decomposes each sentence in
+    // Claude's own session (see `--emit-claim-targets`) and writes them here. The CLI never calls
+    // Claude itself. With no --claims, there is no decomposition — fall back to whole-sentence NLI.
     let decompose = null;
     if (wantDecompose) {
-      const nTargets = claimTargets(docText).length;
       if (claimsFile) {
         if (!existsSync(claimsFile)) { console.error(`No such --claims file: ${claimsFile}`); process.exit(2); }
-        const claims = loadClaimsFile(claimsFile, nTargets);
+        const claims = loadClaimsFile(claimsFile, claimTargets(docText).length);
         decompose = async () => claims;
-      } else if (insideClaudeSession()) {
-        console.error('(inside a Claude session — not nesting a `claude -p`. For atomic-claim decomposition run the `/mari factcheck` skill, or pass --claims (see `--emit-claim-targets`). Falling back to whole-sentence NLI.)');
-      } else if (claudeCliAvailable()) {
-        decompose = claudeDecomposeBatch; // standalone: one top-level claude -p for the document
       } else {
-        console.error('(--decompose needs Claude to split claims, but no `claude` CLI was found and no --claims file was given. Install the CLI, set MARI_CLAUDE_BIN, or pass --claims. Falling back to whole-sentence NLI.)');
+        console.error('(--decompose needs atomic claims from Claude: run the `/mari factcheck` skill, or pass --claims <file> (get the sentence list with `--emit-claim-targets`). Falling back to whole-sentence NLI.)');
       }
     }
 
@@ -629,7 +623,7 @@ function live() {
     const idx = sents.indexOf(s) + 1;
     const orig = s.text.trim();
     const tighter = tightenSentence(orig);
-    const flags = [...new Set(detectText(orig, { config, useInlineIgnores: false }).map((f) => f.ruleId))];
+    const flags = [...new Set(detectText(orig, { config }).map((f) => f.ruleId))];
     console.log(`\n[${idx}] ${orig}`);
     console.log(`  tighter: ${tighter === orig ? '(already tight)' : tighter}`);
     if (flags.length) console.log(`  flags:   ${flags.join(', ')}`);
@@ -1118,7 +1112,7 @@ Usage:
   mari detect <path|.> [--json] [--summary] [--score] [--strict] [--quiet] [--stdin] [--style=microsoft|google|ap|chicago|plain] [--models] [--slop-spans] [--grammar] [--no-config]
   mari ignores list | add-rule <id> | add-file <glob> | add-value <rule> <value> [--reason "…"]
   mari factcheck <file> [--source <file>] [--json] [--strict] [--models] [--decompose] [--claims <file>] [--ground=attention]   Check claims vs FACTS.md
-                        (--decompose splits sentences into atomic claims — via Claude standalone, or the /mari skill in-session; --emit-claim-targets prints the sentences to decompose)
+                        (--decompose splits sentences into atomic claims via the /mari skill; --emit-claim-targets prints the sentences to decompose, --claims <file> consumes them)
   mari facts list | add "<fact>"                                Manage the fact base
   mari install [--providers=claude,cursor,codex,copilot] [--force]   Wire editor hooks + install the skill
   mari update             Refresh the installed skill + hooks from this repo

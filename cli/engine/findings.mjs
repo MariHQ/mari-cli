@@ -53,7 +53,7 @@ export function renderHuman(fileResults, { quiet = false } = {}) {
   }
   out.push('');
   out.push(`${totalErr} error · ${totalWarn} warn · ${totalAdv} advisory across ${fileResults.length} file(s)`);
-  out.push(`Waive inline: <!-- mari-disable <rule-id>: reason -->`);
+  out.push(`Waive: mari ignores add-rule <rule-id> | add-file <glob> | add-value <rule> <value> (writes .mari/config.json)`);
   return out.join('\n');
 }
 

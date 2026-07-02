@@ -4,7 +4,7 @@ import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { join, relative, extname, basename } from 'node:path';
 import { segment, isNonLatinProse } from './segment.mjs';
 import { RULES } from './rules.mjs';
-import { parseInlineWaivers, waived, fileIgnored } from './config.mjs';
+import { fileIgnored } from './config.mjs';
 import { dedupe, sortFindings } from './findings.mjs';
 import { sourceLangFor, isSourceFile, isCodeFile, maskSource } from './detect-strings.mjs';
 
@@ -27,7 +27,7 @@ export function looksLikeData(text) {
   return longLines || sentences < words / 200;
 }
 
-export function detectText(text, { config, useInlineIgnores = true } = {}) {
+export function detectText(text, { config } = {}) {
   const ctx = segment(text);
   // check the masked text so English license headers/code don't keep a non-English doc in scope
   if (isNonLatinProse(ctx.masked)) return [];
@@ -54,15 +54,10 @@ export function detectText(text, { config, useInlineIgnores = true } = {}) {
       return !vals.some((v) => f.span.toLowerCase().includes(String(v).toLowerCase()));
     });
   }
-  // inline waivers
-  if (useInlineIgnores) {
-    const waivers = parseInlineWaivers(text);
-    findings = findings.filter((f) => !waived(waivers, f.ruleId, f.line));
-  }
   return sortFindings(findings);
 }
 
-export function detectFile(path, { config, root = process.cwd(), useInlineIgnores = true, lintSource = false } = {}) {
+export function detectFile(path, { config, root = process.cwd(), lintSource = false } = {}) {
   const rel = (relative(root, path) || basename(path)).replace(/\\/g, '/'); // win32: globs assume '/'
   if (config?.ignoreFiles && fileIgnored(rel, config.ignoreFiles)) return null;
   const ext = extname(path).toLowerCase();
@@ -71,7 +66,7 @@ export function detectFile(path, { config, root = process.cwd(), useInlineIgnore
     // Never prose-lint code — without the flag, skip it.
     if (!lintSource) return null;
     const masked = maskSource(readFileSync(path, 'utf8'), sourceLangFor(ext));
-    return { file: rel, findings: detectText(masked, { config, useInlineIgnores }), text: masked };
+    return { file: rel, findings: detectText(masked, { config }), text: masked };
   }
   // Code in an unsupported language (Java, Scala, Go, …): never lint it as prose.
   if (isCodeFile(ext)) return null;
@@ -80,7 +75,7 @@ export function detectFile(path, { config, root = process.cwd(), useInlineIgnore
   if (isNonEnglishLocale(path)) return null; // localized translation (name.<locale>.md)
   const text = readFileSync(path, 'utf8');
   if (looksLikeData(text)) return null; // data dump / test fixture, not prose
-  return { file: rel, findings: detectText(text, { config, useInlineIgnores }), text };
+  return { file: rel, findings: detectText(text, { config }), text };
 }
 
 export function isProse(path) { return PROSE_EXT.has(extname(path).toLowerCase()); }

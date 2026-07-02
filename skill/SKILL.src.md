@@ -71,8 +71,8 @@ of ground truth — run it first so every edit is grounded in concrete findings,
   - `detect`/`audit <file>` → run the detector and report.
   - `factcheck <file>` → check the doc's claims against `FACTS.md` (or `--source <file>`). Load
     `skill/reference/factcheck.md`. For the deep **atomic-claim** pass, YOU do the decomposition
-    in-session (never spawn `claude -p`): emit the target sentences, split each into atomic claims,
-    write them, and re-run with `--claims`. The reference has the exact flow.
+    in-session (the CLI never calls a model or `claude` for it): emit the target sentences, split
+    each into atomic claims, write them, and re-run with `--claims`. The reference has the flow.
 - **First word is an editing command** (`init`, `document`, `draft`, `outline`, `glossary`,
   `critique`, `deslop`, `tighten`, `clarify`, `polish`, `sharpen`, `soften`, `harden`, `voice`,
   `cadence`, `format`, `delight`, `adapt`, `localize`, `live`) → run the setup phase, load
@@ -154,8 +154,8 @@ Each has its own `skill/reference/<command>.md`; load it before running. Grouped
   notify the agent when matching files are edited (e.g. update API docs when `src/api/**` changes);
   `rules discover` proposes some from the repo, `rules list` / `rules remove <name>` manage them.
   Fires on any edited file, not just markdown.
-- Inline waiver in any file: `<!-- mari-disable <rule-id>: reason -->`
-  (`-line` / `-next-line` variants scope to one line).
+- Waive findings via `.mari/config.json` only (no inline in-file comments): `ignores add-rule`
+  silences a rule, `add-file <glob>` skips whole files, `add-value <rule> <value>` allows a term.
 
 ## Always
 

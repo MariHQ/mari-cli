@@ -16,8 +16,8 @@ is around.
 
 **Atomic-claim (`--decompose`) — YOU are the decomposer.** Splitting each sentence into
 self-contained claims catches one bad clause buried in an otherwise-true sentence. Decomposition
-is a generative task, so **Claude does it, not a bundled model**. When you're running inside this
-session, do it yourself in three steps — never spawn `claude -p` (that would nest):
+is a generative task, so **you do it in-session — the CLI never calls a model or `claude` for
+it.** Three steps:
 
 1. **Emit the sentences to decompose:**
    ```
@@ -41,9 +41,9 @@ session, do it yourself in three steps — never spawn `claude -p` (that would n
    ```
    mari does the deterministic + NLI grounding on your claims and reports per-claim verdicts.
 
-Standalone (a human runs `--decompose` with no session), mari shells out to `claude -p` once for
-the whole document — that's top-level, not nested. So `--decompose` alone still works outside
-Claude; the three-step flow above is only how *you* avoid a redundant nested call.
+Standalone (a human runs `--decompose` with no session and no `--claims`), there's no decomposer,
+so mari just falls back to whole-sentence NLI grounding and prints a note. The atomic tier only
+runs through this skill (or any `--claims` file). The CLI never invokes Claude on its own.
 
 ## Report
 - Lead with `error`s (contradictions, number/date mismatches) — quote the claim and the fact.

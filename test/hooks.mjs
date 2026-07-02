@@ -112,7 +112,7 @@ check('pre-write: non-prose extension is skipped', r3.findings.length === 0);
 // hook severity floor: advisories are dropped by default (error+warn only) so a small edit
 // doesn't surface whole-file advisory backlog. Advisories remain available via `mari audit`.
 const advisoryText = 'Run grep, sed, etc. to filter things.';
-const rawAdv = detectText(advisoryText, { config: { ignoreRules: new Set(), ignoreValues: {}, ignoreFiles: [], styleGuide: 'microsoft' }, useInlineIgnores: true });
+const rawAdv = detectText(advisoryText, { config: { ignoreRules: new Set(), ignoreValues: {}, ignoreFiles: [], styleGuide: 'microsoft' } });
 check('floor setup: raw detect surfaces an advisory', rawAdv.some((f) => f.severity === 'advisory'));
 const floored = await lintContent(advisoryText, cwd, '.md');
 check('hook floor: advisories suppressed by default', floored.findings.every((f) => f.severity !== 'advisory'));

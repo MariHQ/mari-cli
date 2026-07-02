@@ -6,7 +6,7 @@ import { RULES } from '../cli/engine/rules.mjs';
 import { CASES } from './cases.mjs';
 
 const NBSP = String.fromCharCode(0x00A0);
-const optsFor = (pack) => ({ config: { ignoreRules: new Set(), ignoreValues: {}, ignoreFiles: [], styleGuide: pack || 'microsoft' }, useInlineIgnores: false });
+const optsFor = (pack) => ({ config: { ignoreRules: new Set(), ignoreValues: {}, ignoreFiles: [], styleGuide: pack || 'microsoft' } });
 const has = (text, rule, pack) => detectText(text, optsFor(pack)).some((f) => f.ruleId === rule);
 
 // Some characters don't survive cleanly as source literals; inject them here deterministically.

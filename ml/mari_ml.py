@@ -38,9 +38,9 @@ GLINER_MODEL = os.environ.get("MARI_GLINER_MODEL", "urchade/gliner_multi-v2.1")
 SLOP_LABELS = ["marketing buzzword", "hype phrase", "vague corporate jargon",
                "empty filler phrase", "overused cliche"]
 # Generative grounding tier (opt-in, heavier): Tier 4 Lookback-Lens attention grounding (needs
-# eager attention to read the matrices). Tier 2 atomic-claim decomposition is no longer a local
-# model — it's delegated to Claude (the live session when embedded, else `claude -p`), so a tiny
-# instruct LM never has to do a job the orchestrating model already does far better.
+# eager attention to read the matrices). Tier 2 atomic-claim decomposition is not here at all —
+# Claude does it in-session via the mari skill (the CLI ships no decomposer), so a tiny instruct
+# LM never has to do a job the orchestrating model already does far better.
 LOOKBACK_MODEL = os.environ.get("MARI_LOOKBACK_MODEL", "Qwen/Qwen3-0.6B")
 
 _state = {}

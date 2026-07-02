@@ -80,7 +80,7 @@ decomposition.
 |------|:---:|--------------|------|
 | **Deterministic** | ✅ always | Regex, wordlists, density thresholds, structural/markdown analysis | instant, no download |
 | **Local models** | ✅ default (auto-cached once) | GLiNER slop-span extraction, small NLI/classifier for grounding & fuzzy slop, perplexity/burstiness | small encoder models, CPU, no GPU/API |
-| **Generative (opt-in)** | opt-in | Qwen for attention-grounding (Lookback Lens) on-device; atomic-claim decomposition delegated to Claude (live session or `claude` CLI) | on-device attention model + a Claude call for decomposition |
+| **Generative (opt-in)** | opt-in | Qwen for attention-grounding (Lookback Lens) on-device; atomic-claim decomposition done by Claude in-session via the `/mari` skill (the CLI ships no decomposer) | on-device attention model; decomposition is a skill step, no bundled model |
 
 A `--no-models` mode runs the pure-deterministic tier alone for locked-down/offline environments
 (no download at all). Grounding additionally requires a `FACTS.md`.
@@ -240,9 +240,8 @@ input (file | stdin | string literal)
 
 Every finding carries: `rule id`, `category/family`, `severity` (error/warn/advisory),
 `source` (rule | ml-span | ml-score | grounding), location, the offending span, a one-line
-fix, and the citation/style-section it enforces. Findings are suppressible by config
-(`ignoreRules`/`ignoreFiles`/`ignoreValues`) and by inline waiver
-`<!-- mari-disable <id>: reason -->` (whole-file, or `-line` / `-next-line`).
+fix, and the citation/style-section it enforces. Findings are suppressible only via the JSON config
+(`ignoreRules`/`ignoreFiles`/`ignoreValues` in `.mari/config.json`) — there are no inline waivers.
 
 Code fences and inline code are excluded from prose rules; quoted spans and citations bypass
 the lexical/inclusive rules (you can quote a slur in a citation).
@@ -570,8 +569,8 @@ cooperation and a key, so it can't read arbitrary third-party text.)
 - `.mari/config.json` (+ machine-local `.mari/config.local.json`): `detector.styleGuide`,
   `detector.ignoreRules/ignoreFiles/ignoreValues`, register defaults, `ml.*`, `grounding.*`,
   `facts.*`, `hook.*`.
-- **Inline waivers:** `<!-- mari-disable <id>: reason -->` (whole file), `-line` / `-next-line`
-  variants; bypassable with `--no-inline-ignores`. Reasons are encouraged so waivers are auditable.
+- **Waivers:** JSON config only (`ignores add-rule` / `add-file` / `add-value`, with optional
+  `ignoreReasons` for audit). No inline in-file comments; `--no-config` bypasses for a run.
 - **Register × pack matrix** (which packs fire where): docs → MS/Google + inclusive + formatting +
   citations + grounding; marketing → MS + inclusive + formatting(looser bold); editorial →
   Chicago/AP + relaxed em-dash; microcopy → MS + strict length; academic → Chicago + strict
