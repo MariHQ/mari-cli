@@ -679,9 +679,10 @@ function asset() {
 // the skill flow (skill/reference/platform.md); this command is deterministic — it scans, prints,
 // and writes files without prompting. Detection auto-runs before a scaffold so we never provision a
 // second site next to an existing one (override with --force).
-function walkForPlatforms(root, { maxDepth = 4, maxEntries = 20000 } = {}) {
+function walkForPlatforms(root, { maxDepth = 4, maxEntries = 20000, keep = [] } = {}) {
   const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'coverage', '.mari',
     'target', 'out', 'vendor', '.venv', '_build', 'public', '.cache']);
+  for (const k of keep) SKIP.delete(k); // `mari check` needs public/ — sites serve it at "/"
   const files = [];
   let count = 0;
   (function walk(dir, depth) {
@@ -771,7 +772,7 @@ function platform() {
 function check() {
   const root = process.cwd();
   const config = flag('no-config') ? null : loadConfig(root);
-  const files = walkForPlatforms(root, { maxDepth: 8, maxEntries: 50000 });
+  const files = walkForPlatforms(root, { maxDepth: 8, maxEntries: 50000, keep: ['public'] });
   const READ = /\.(md|mdx|mdc|markdown|rst|adoc)$/i;
   const NAV_ONLY = /(^|\/)mkdocs\.ya?ml$/i; // non-markdown files the nav parsers need to read
   const pages = [];

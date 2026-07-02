@@ -75,6 +75,19 @@ check('escaping the repo root → null', resolveLink('a.md', '../../x.md') === n
   check('root-relative resolvable link ok', !fs.some((f) => f.span.includes('/docs/b.md')));
   check('root-relative unresolvable → advisory', fs.some((f) => f.ruleId === 'link-unresolved-absolute' && f.severity === 'advisory'));
 }
+{
+  // GitHub renders directory links; Next.js/Docusaurus serve public|static at the site root
+  const pages = [{ path: 'README.md', text: '[dir](src/proto) ![img](/images/logo.png) [doc-static](/parquet.md)\n' }];
+  const fs = checkLinks(pages, ['README.md', 'src/proto/a.proto', 'public/images/logo.png', 'static/parquet.md']);
+  check('link to a real directory ok', !fs.some((f) => f.span.includes('src/proto')));
+  check('root-relative link resolves via public/', !fs.some((f) => f.span.includes('logo.png')));
+  check('root-relative link resolves via static/', !fs.some((f) => f.span.includes('parquet')));
+}
+{
+  const pages = [{ path: 'README.md', text: '[bad](/Users/alice/proj/x.py) [win](C:\\repo\\y.md)\n' }];
+  const fs = checkLinks(pages, ['README.md']);
+  check('machine-absolute path → warn with its own rule', fs.some((f) => f.ruleId === 'link-machine-path' && f.severity === 'warn'));
+}
 
 // --- nav: mkdocs ---
 {

@@ -119,9 +119,21 @@ export function resolveLink(fromPath, href) {
 const EXTERNAL = /^([a-z][a-z0-9+.-]*:|\/\/)/i; // scheme: or protocol-relative
 const PAGE_EXT = /\.(md|mdx|mdc|markdown|rst|adoc)$/i;
 
+// Every directory implied by the file list — GitHub renders a link to a bare directory, so a
+// target that is a real directory counts as resolved.
+function dirsOf(paths) {
+  const dirs = new Set();
+  for (const p of paths) {
+    const segs = String(p).split('/');
+    for (let i = 1; i < segs.length; i++) dirs.add(segs.slice(0, i).join('/'));
+  }
+  return dirs;
+}
+
 // A link target `t` (already resolved repo-relative) exists if any generator-style candidate
-// does: exact, extensionless page (`t.md`), or directory index. Returns the matched path.
-function findTarget(t, pathSet) {
+// does: exact, extensionless page (`t.md`), directory index, or a real directory. Returns the
+// matched path.
+function findTarget(t, pathSet, dirSet) {
   const clean = t.replace(/\/+$/, '');
   const cands = [t, clean,
     `${clean}.md`, `${clean}.mdx`, `${clean}.markdown`, `${clean}.rst`, `${clean}.adoc`,
@@ -129,6 +141,7 @@ function findTarget(t, pathSet) {
   // generators publish page.md as page/ or page.html — map .html back to a source page
   if (/\.html?$/i.test(clean)) cands.push(clean.replace(/\.html?$/i, '.md'), clean.replace(/\.html?$/i, '.mdx'));
   for (const c of cands) if (c && pathSet.has(c)) return c;
+  if (dirSet && dirSet.has(clean)) return clean;
   return null;
 }
 
@@ -139,6 +152,7 @@ const MARKDOWN = /\.(md|mdx|mdc|markdown)$/i;
 // path (posix), so links to code/assets also resolve.
 export function checkLinks(pages, paths) {
   const pathSet = new Set(paths);
+  const dirSet = dirsOf(paths);
   const pageText = new Map(pages.map((p) => [p.path, p.text]));
   const anchorCache = new Map();
   const anchors = (p) => {
@@ -172,22 +186,33 @@ export function checkLinks(pages, paths) {
       let resolved = null;
       if (abs) {
         // Root-relative links resolve against the SITE's base URL, which we can't know
-        // statically — try the repo root and every ancestor of the page (the docs root is one
-        // of them); if none hits, flag it advisory rather than claiming it's broken.
+        // statically — try the repo root, every ancestor of the page (the docs root is one of
+        // them), and the common static-serving roots (Next.js/Docusaurus publish public/ and
+        // static/ at "/"); if none hits, flag it advisory rather than claiming it's broken.
         const rel = decodeURIComponent(pathPart).slice(1);
         const dirs = page.path.split('/').slice(0, -1);
-        for (let i = 0; i <= dirs.length && !target; i++) {
-          resolved = [...dirs.slice(0, i), rel].join('/');
-          target = findTarget(resolved, pathSet);
+        const bases = [...Array(dirs.length + 1).keys()].map((i) => dirs.slice(0, i)).concat([['public'], ['static']]);
+        for (const base of bases) {
+          resolved = [...base, rel].join('/');
+          target = findTarget(resolved, pathSet, dirSet);
+          if (target) break;
         }
         if (!target) {
-          emit('advisory', l.offset, l.span, 'link-unresolved-absolute',
-            `Root-relative link "${href}" doesn't match any file — it resolves against the site's base URL, so verify it in the built site.`);
+          // A machine-absolute path (/Users/…, /home/…) is never a site URL — it worked on
+          // exactly one person's laptop. (Windows C:\ paths parse as a scheme and are already
+          // skipped as external.)
+          if (/^\/(Users|home|tmp|var|opt|mnt)\//.test(pathPart)) {
+            emit('warn', l.offset, l.span, 'link-machine-path',
+              `Link "${href}" is a local filesystem path — it breaks for every other reader; use a repo-relative path.`);
+          } else {
+            emit('advisory', l.offset, l.span, 'link-unresolved-absolute',
+              `Root-relative link "${href}" doesn't match any file — it resolves against the site's base URL, so verify it in the built site.`);
+          }
           continue;
         }
       } else {
         resolved = resolveLink(page.path, decodeURIComponent(pathPart));
-        target = resolved != null ? findTarget(resolved, pathSet) : null;
+        target = resolved != null ? findTarget(resolved, pathSet, dirSet) : null;
         if (!target) {
           emit('warn', l.offset, l.span, 'link-broken', `Broken link "${href}" — no file at "${resolved ?? pathPart}".`);
           continue;
