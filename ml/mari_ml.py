@@ -24,10 +24,12 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 NLI_MODEL = os.environ.get("MARI_NLI_MODEL", "cross-encoder/nli-deberta-v3-xsmall")
 PPL_MODEL = os.environ.get("MARI_PPL_MODEL", "Qwen/Qwen3.5-0.8B")
-# Embeddings for `mari assoc` use the SAME Qwen3.5-0.8B we standardized on for perplexity and
-# attention — one model for the whole tier (one download, one resident copy). It's a decoder, so
-# do_embed uses last-token pooling (auto-selected by the "qwen" name). Override MARI_EMBED_MODEL.
-EMBED_MODEL = os.environ.get("MARI_EMBED_MODEL", "Qwen/Qwen3.5-0.8B")
+# Embeddings for `mari assoc`/`mari explore` use the purpose-built Qwen3-Embedding-0.6B. We
+# tried sharing the Qwen3.5-0.8B base LM with the ppl tier (one download), but its cosines are
+# too compressed for RETRIEVAL — on a real repo, generic prose outranked the on-topic code for
+# every query we tried, while the embedding model ranked the right chunks first. It's a decoder,
+# so do_embed uses last-token pooling (auto by the "qwen" name). Override MARI_EMBED_MODEL.
+EMBED_MODEL = os.environ.get("MARI_EMBED_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 # gliner_multi (mDeBERTa base) is used over gliner_small: on abstract stylistic labels the
 # small model's zero-shot scores are noise (a clean "Flink" outscores real buzzwords), while
 # multi cleanly separates slop (~0.2-0.3) from clean prose (<0.12). It's also multilingual,

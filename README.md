@@ -348,6 +348,25 @@ that's stale after a rename or was never anchored to the code. Both are leads fo
 verdicts, and both run fully locally (~3s per doc; needs the shipped attention binary + a small
 GGUF model, and skips gracefully without them).
 
+## Explore a repo (RAG + attention)
+
+The same index that powers `mari assoc` answers questions. `explore` embeds your query, searches
+the on-disk Lance vector store, and prints the top chunks with `file:line` and a snippet — the
+index builds itself on first use:
+
+```bash
+npx mari explore "how does the post-edit hook decide what to show the agent"
+npx mari explore docs/quickstart.md        # what in the repo relates to this file?
+npx mari explore "…" --deep                # attention-rerank the top hits (~3s each)
+npx mari explore "…" --k 20 --json         # more hits, machine-readable
+```
+
+Embeddings retrieve (purpose-built `Qwen3-Embedding-0.6B`, local, CPU-friendly); `--deep` then
+scores each hit with the native attention model — how much of the chunk *genuinely engages* the
+question — which separates true matches from vocabulary coincidence. Everything runs locally;
+`mari explore --build` refreshes the index after big changes, and a changed embedding model
+triggers a clean rebuild automatically.
+
 ## Localized docs (i18n)
 
 When a doc has translations, editing the source should remind you the translations are now

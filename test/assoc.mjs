@@ -87,6 +87,16 @@ ok(!walkFiles(dir).includes('src/charge.test.js'), 'walkFiles skips *.test.js');
   ok(files.includes('a.md~b.js'), 'lanceRecall finds the a↔b neighbor');
   ok(!files.some((f) => f.includes('c.md')), 'lanceRecall excludes the unrelated chunk');
   ok(pairs.every((p) => c[p.i].file !== c[p.j].file), 'lanceRecall excludes same-file pairs');
+
+  // free-vector search (mari explore): a query about payments lands on the payment chunks
+  const [qv] = fakeEmbed(['customer card receipt']);
+  const hits = await lance.lanceSearch(ldir, qv, { k: 2 });
+  ok(hits.length === 2 && hits[0].sim >= hits[1].sim, 'lanceSearch returns k hits sorted by similarity');
+  ok(hits.every((h) => h.file !== 'c.md'), 'lanceSearch ranks the related chunks above the unrelated one');
+  ok(typeof hits[0].start === 'number' && hits[0].file, 'lanceSearch hits carry file + line span');
+  const excl = await lance.lanceSearch(ldir, qv, { k: 3, excludeFile: 'a.md' });
+  ok(excl.every((h) => h.file !== 'a.md'), 'lanceSearch excludeFile filters the source file');
+  ok((await lance.lanceSearch(join(dir, 'nope'), qv, { k: 2 })).length === 0, 'lanceSearch on a missing store returns []');
 }
 
 rmSync(dir, { recursive: true, force: true });

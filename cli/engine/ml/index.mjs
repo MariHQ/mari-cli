@@ -52,7 +52,7 @@ export function capabilities() {
     available: !!pythonPath() && existsSync(SCRIPT),
     runtime: 'python sidecar (torch/transformers/gliner)',
     models: { nli: 'cross-encoder/nli-deberta-v3-xsmall', ppl: process.env.MARI_PPL_MODEL || 'Qwen/Qwen3.5-0.8B', gliner: process.env.MARI_GLINER_MODEL || 'urchade/gliner_multi-v2.1',
-      lookback: process.env.MARI_LOOKBACK_MODEL || 'Qwen/Qwen3-0.6B', embed: process.env.MARI_EMBED_MODEL || 'Qwen/Qwen3.5-0.8B' },
+      lookback: process.env.MARI_LOOKBACK_MODEL || 'Qwen/Qwen3-0.6B', embed: process.env.MARI_EMBED_MODEL || 'Qwen/Qwen3-Embedding-0.6B' },
     // Tier 2 decomposition is delegated to Claude (see engine/decompose.mjs), not a local model.
   };
 }

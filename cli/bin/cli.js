@@ -16,7 +16,7 @@ import { extname } from 'node:path';
 import { renderHuman, renderJSON, renderSummary, summarize } from '../engine/findings.mjs';
 import { parseFacts, factcheck, factcheckNLI, factcheckDecomposed, factcheckLookback, claimTargets, sortFindings } from '../engine/grounding.mjs';
 import { scoreDocument, renderScore } from '../engine/score.mjs';
-import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, lookbackGrounding, mlSlopFindings, embed } from '../engine/ml/index.mjs';
+import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, lookbackGrounding, mlSlopFindings, embed, shutdown } from '../engine/ml/index.mjs';
 import { loadClaimsFile } from '../engine/decompose.mjs';
 import { buildAssoc, loadAssoc, saveAssoc, associationsForFile, assocDir } from '../engine/assoc.mjs';
 import { tmpdir } from 'node:os';
@@ -37,7 +37,7 @@ const rest = argv.slice(1);
 
 // Value-taking options accept both `--opt=value` and `--opt value`. Listed so positionals()
 // can skip a space-form value and not mistake it for a positional argument.
-const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model', 'limit', 'paths', 'notify', 'exclude', 'name', 'claims']);
+const VALUE_OPTS = new Set(['source', 'style', 'providers', 'ground', 'threshold', 'reason', 'n', 'model', 'limit', 'paths', 'notify', 'exclude', 'name', 'claims', 'k']);
 function flag(name) { return rest.includes(`--${name}`); }
 function opt(name, def = null) {
   const eq = rest.find((a) => a.startsWith(`--${name}=`));
@@ -76,6 +76,7 @@ async function main() {
     case 'surface': return surface();
     case 'i18n': return i18n();
     case 'assoc': return await assocCmd();
+    case 'explore': return await explore();
     case 'live': return live();
     case undefined:
     case '--help':
@@ -1078,6 +1079,32 @@ function attnAssociate(textA, textB) {
   } catch { return { associated: false, score: 0 }; }
 }
 
+// Build (or rebuild) the repo's semantic index: chunk + embed every textual file into the
+// Lance vector store, derive cross-file associations. Shared by `assoc build` and `explore`'s
+// first-use auto-build. Requires the ML sidecar (checked here so every caller errors the same).
+async function runAssocBuild(root, { useAttn = false } = {}) {
+  if (!capabilities().available) { console.error('This needs the ML sidecar for embeddings: python3.12 -m venv .venv && .venv/bin/pip install -r ml/requirements.txt (or set MARI_PYTHON).'); process.exit(2); }
+  let attnFn = null;
+  if (useAttn) {
+    console.error(`(association via attention model ${attnModel().split('/').pop()} — slow)`);
+    attnFn = attnAssociate;
+  }
+  console.error(`(embedding with ${capabilities().models.embed} — first run downloads the model…)`);
+  const embedFn = (texts) => embed(texts);
+  const lanceDir = join(assocDir(root), 'lance'); // vectors persist as a Lance table
+  // The vector cache is keyed by file hash ONLY — vectors from a different embed model would be
+  // silently reused into a mixed space (half old-model, half new). If the model changed (or the
+  // index predates model stamping), wipe the store and re-embed everything.
+  const prev = loadAssoc(root);
+  if (prev?.embedModel !== capabilities().models.embed) rmSync(lanceDir, { recursive: true, force: true });
+  const { index, stats } = await buildAssoc(root, { embedFn, attnFn, lanceDir, onProgress: (m) => console.error(`  · ${m}`) });
+  index.builtAt = new Date().toISOString();
+  index.vectorStore = 'lance';
+  index.embedModel = capabilities().models.embed; // queries must embed with the same model
+  saveAssoc(root, index); // index.json only — vectors live in Lance
+  return { ...stats, via: index.via };
+}
+
 const ASSOC_USAGE = 'Usage: mari assoc build [--attn] | list [file] [--json] | check <file>';
 async function assocCmd() {
   const p = positionals();
@@ -1085,22 +1112,10 @@ async function assocCmd() {
   const root = process.cwd();
 
   if (sub === 'build') {
-    if (!capabilities().available) { console.error('mari assoc needs the ML sidecar for embeddings (create .venv, install ml/requirements.txt, or set MARI_PYTHON).'); process.exit(2); }
     const useAttn = flag('attn');
-    let attnFn = null;
-    if (useAttn) {
-      if (!attnReady()) { console.error('--attn needs the native attention binary + a GGUF model (see native/attn/README.md, or set MARI_ATTN_MODEL).'); process.exit(2); }
-      console.error(`(association via attention model ${attnModel().split('/').pop()} — slow)`);
-      attnFn = attnAssociate;
-    }
-    console.error(`(embedding with ${capabilities().models.embed} — first run downloads the model…)`);
-    const embedFn = (texts) => embed(texts);
-    const lanceDir = join(assocDir(root), 'lance'); // vectors persist as a Lance table
-    const { index, stats } = await buildAssoc(root, { embedFn, attnFn, lanceDir, onProgress: (m) => console.error(`  · ${m}`) });
-    index.builtAt = new Date().toISOString();
-    index.vectorStore = 'lance';
-    saveAssoc(root, index); // index.json only — vectors live in Lance
-    console.log(`✓ .mari/assoc — ${stats.associations} associations (via ${index.via}) from ${stats.chunks} chunks across ${stats.files} files; vectors in Lance.`);
+    if (useAttn && !attnReady()) { console.error('--attn needs the native attention binary + a GGUF model (see native/attn/README.md, or set MARI_ATTN_MODEL).'); process.exit(2); }
+    const stats = await runAssocBuild(root, { useAttn });
+    console.log(`✓ .mari/assoc — ${stats.associations} associations (via ${stats.via}) from ${stats.chunks} chunks across ${stats.files} files; vectors in Lance.`);
     return;
   }
 
@@ -1133,6 +1148,97 @@ async function assocCmd() {
   console.error(ASSOC_USAGE); process.exit(2);
 }
 const toPosix = (p) => String(p).split(sep).join('/');
+
+// ─── mari explore — RAG + attention over the repo ─────────────────────────────────────────────
+// One command to ask a repo anything: embed the query, vector-search the Lance chunk store
+// (built automatically on first use), print the top chunks with file:line + snippet. `--deep`
+// reranks the top hits with attention — "how much of this chunk genuinely engages the query?" —
+// which separates true matches from vocabulary coincidence. A FILE argument explores from that
+// file's content instead (what in the repo relates to this file?).
+const EXPLORE_USAGE = 'Usage: mari explore "<question>" | <file>  [--k N] [--deep] [--json] [--build]';
+
+const snippetOf = (text, n = 3) => String(text).split('\n')
+  .map((l) => l.trim()).filter(Boolean).slice(0, n).map((l) => l.slice(0, 110));
+
+async function explore() {
+  const root = process.cwd();
+  const args = positionals();
+  if (!args.length && !flag('build')) { console.error(EXPLORE_USAGE); process.exit(2); }
+  const k = Math.max(1, parseInt(opt('k') || '12', 10) || 12);
+  const lanceDir = join(assocDir(root), 'lance');
+  const { lanceSearch } = await import('../engine/assoc-lance.mjs');
+
+  // First use: build the vector index right here — explore should work from zero. A stored
+  // index embedded with a DIFFERENT model is useless for this query (mixed spaces), so a model
+  // change also triggers a rebuild.
+  const idx = loadAssoc(root);
+  const staleModel = idx?.embedModel && idx.embedModel !== capabilities().models.embed;
+  if (flag('build') || staleModel || !existsSync(lanceDir)) {
+    console.error(staleModel ? `(index was embedded with ${idx.embedModel}, now using ${capabilities().models.embed} — rebuilding…)`
+      : existsSync(lanceDir) ? '(rebuilding the vector index…)'
+        : '(no vector index yet — building one now; this embeds the whole repo once…)');
+    await runAssocBuild(root, { useAttn: false });
+    if (!args.length) return;
+  }
+  if (!capabilities().available) { console.error('mari explore needs the ML sidecar for embeddings: python3.12 -m venv .venv && .venv/bin/pip install -r ml/requirements.txt (or set MARI_PYTHON).'); process.exit(2); }
+
+  // A file argument explores FROM that file (its content is the query); free text embeds as-is.
+  const isFile = args.length === 1 && existsSync(args[0]) && statSync(args[0]).isFile();
+  const queryText = isFile ? readFileSync(args[0], 'utf8').slice(0, 4000) : args.join(' ');
+  const excludeFile = isFile ? toPosix(relative(root, args[0]) || args[0]) : null;
+
+  // Query-side instruction prefix (Qwen embedding convention: instruct the query, keep the
+  // documents raw) — free text is a QUESTION, so tell the embedder that; a file query is
+  // document-shaped already and stays raw like the chunks it's matched against.
+  const [qv] = await embed([queryText], isFile ? {} : { instruct: 'Given a question about this code repository, retrieve the file chunks that answer it' });
+  if (!qv?.length) { console.error('Embedding the query failed.'); process.exit(2); }
+  // Over-fetch, then cap hits per file — exploration wants the top PLACES in the repo, and one
+  // large file would otherwise monopolize the list with near-duplicate chunks.
+  const PER_FILE = 3;
+  const raw = await lanceSearch(lanceDir, qv, { k: Math.min(k * 8, 96), excludeFile });
+  const perFile = new Map();
+  const capped = [], overflow = [];
+  for (const h of raw) {
+    const n = perFile.get(h.file) || 0;
+    (n < PER_FILE ? capped : overflow).push(h);
+    perFile.set(h.file, n + 1);
+  }
+  // diversity first, but never return fewer than k when matches exist — backfill from overflow
+  let hits = capped.slice(0, k);
+  if (hits.length < k) hits.push(...overflow.slice(0, k - hits.length));
+  hits.sort((a, b) => b.sim - a.sim);
+  if (!hits.length) { console.log('No matches. `mari explore --build` refreshes the index after big changes.'); return; }
+
+  // The store keeps vectors + spans only — pull each chunk's text live from disk (also means
+  // snippets reflect the file as it is now, not as it was at index time).
+  for (const h of hits) {
+    try { h.text = readFileSync(join(root, h.file), 'utf8').split('\n').slice(h.start - 1, h.end).join('\n'); }
+    catch { h.text = ''; }
+  }
+
+  // --deep: attention rerank — context is the QUESTION, query rows are the chunk, so the score
+  // is the fraction of the chunk that genuinely engages the question (graded, not 0/1).
+  const deep = flag('deep');
+  if (deep) {
+    if (!attnReady()) { console.error('--deep needs the native attention binary + a GGUF model (set MARI_ATTN_MODEL or drop one in ~/.mari/models).'); process.exit(2); }
+    const top = Math.min(hits.length, Math.max(1, parseInt(opt('limit') || '8', 10) || 8));
+    console.error(`(attention rerank of the top ${top} hits — ~3s each)`);
+    for (const h of hits.slice(0, top)) h.attn = attnAssociate(queryText, h.text).score;
+    hits.sort((a, b) => (b.attn ?? -1) - (a.attn ?? -1) || b.sim - a.sim);
+  }
+
+  if (flag('json')) {
+    console.log(JSON.stringify(hits.map(({ text, ...h }) => ({ ...h, snippet: snippetOf(text) })), null, 2));
+    return;
+  }
+  console.log(isFile ? `Related to ${excludeFile}:` : `Explore: "${queryText.slice(0, 100)}"`);
+  for (const [i, h] of hits.entries()) {
+    const score = h.attn != null ? `attn ${h.attn} · cos ${h.sim}` : `cos ${h.sim}`;
+    console.log(`\n${String(i + 1).padStart(2)}. ${h.file} L${h.start}-${h.end}  (${score})`);
+    for (const l of snippetOf(h.text)) console.log(`      ${l}`);
+  }
+  console.log(`\n(top ${hits.length} by ${deep ? 'attention' : 'embedding'} · --k N for more · ${deep ? '--limit N reranks more' : '--deep reranks with attention'} · --build refreshes the index)`);
+}
 
 // `mari i18n coverage` — coverage mode with the SOURCE as context and the TRANSLATION as query.
 function i18nCoverageCmd() {
@@ -1309,6 +1415,8 @@ Usage:
   mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)
   mari assoc build [--attn] | list [file] | check <file>   Generic semantic association across all files (embeddings + nearest-neighbor); --attn uses attention for the association step
+  mari explore "<question>" | <file> [--k N] [--deep] [--json] [--build]   RAG search over the repo: embed the query, return the top chunks (file:line + snippet).
+                        A file argument finds what relates to that file. --deep reranks hits with attention (~3s each). First run builds the vector index automatically.
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut
@@ -1316,4 +1424,6 @@ Usage:
 Exit code: non-zero when any 'error' finding is present (--strict also fails on 'warn').`);
 }
 
-main().catch((e) => { console.error(e?.stack || String(e)); process.exit(2); });
+// Always release the ML sidecar (no-op if it never started) — a lingering child process
+// otherwise keeps the event loop alive and the CLI never exits after embed-backed commands.
+main().then(() => shutdown()).catch((e) => { console.error(e?.stack || String(e)); process.exit(2); });

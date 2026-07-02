@@ -68,6 +68,11 @@ of ground truth — run it first so every edit is grounded in concrete findings,
   - `surface [dir]` → print the extracted public API surface (JS/TS, Python, Go, Rust
     exports/pub/def/func with file:line). Deterministic and fast — this is the code
     inventory `docsite` documents against and `check --deep` validates against.
+  - `explore "<question>" | <file>` → RAG search over the repo: top chunks (file:line +
+    snippet) for a question, or what relates to a file. `node cli/bin/cli.js explore …`
+    (`--k N` more hits, `--deep` attention rerank ~3s/hit, `--json`). First run embeds the
+    whole repo into `.mari/assoc` (minutes on a big repo — warn the user); after that,
+    queries are ~5s. Use it to locate the prose/code a task touches before editing.
   - `platform` → set up a docs-as-code site generator if the repo has none. Load
     `skill/reference/platform.md`. Run `node cli/bin/cli.js platform detect`. If nothing is set up,
     **ask the user which platform** (`platform list` shows the options). Then run

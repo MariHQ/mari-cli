@@ -33,6 +33,21 @@ export async function lanceWrite(dir, chunks, vecs) {
   return rows.length;
 }
 
+// Free-vector search (`mari explore`): top-k chunks nearest to an arbitrary query vector.
+// Returns [{ id, file, start, end, sim }] sorted by similarity.
+export async function lanceSearch(dir, vector, { k = 12, excludeFile = null } = {}) {
+  try {
+    const db = await (await lib()).connect(dir);
+    if (!(await db.tableNames()).includes(TABLE)) return [];
+    const tbl = await db.openTable(TABLE);
+    let q = tbl.search(vector).distanceType('cosine').limit(k);
+    if (excludeFile) q = q.where(`file != '${String(excludeFile).replace(/'/g, "''")}'`);
+    const rows = await q.toArray();
+    return rows.map((r) => ({ id: r.id, file: r.file, start: r.start, end: r.end,
+      sim: Math.round((1 - (r._distance ?? 1)) * 1000) / 1000 }));
+  } catch { return []; } // no store yet / unreadable — caller treats as "no matches"
+}
+
 // Nearest-neighbor recall via Lance: for each chunk, its top-annK neighbors in OTHER files with
 // cosine similarity ≥ cosThreshold. Returns unique cross-file pairs {i, j, cos}.
 export async function lanceRecall(dir, chunks, vecs, { annK = 8, cosThreshold = 0.55 } = {}) {
