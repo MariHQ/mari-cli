@@ -24,6 +24,8 @@ import { segment } from '../engine/segment.mjs';
 import * as LEX from '../engine/lexicons.mjs';
 import { detectAssetType, validateAsset, scaffold, ASSET_TYPES } from '../engine/assets.mjs';
 import { detectPlatforms, scaffoldPlatform, scaffoldablePlatforms, platformSpec } from '../engine/platforms.mjs';
+import { checkSite, communityAssets } from '../engine/site.mjs';
+import { extractSurface, renderSurface, chunkSurface, itemsOfSpan, SOURCE_EXT, NOT_SURFACE } from '../engine/surface.mjs';
 import { i18nAssociations, i18nConform } from '../engine/i18n.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -70,6 +72,8 @@ async function main() {
     case 'asset': return asset();
     case 'platform':
     case 'platforms': return platform();
+    case 'check': return check();
+    case 'surface': return surface();
     case 'i18n': return i18n();
     case 'assoc': return await assocCmd();
     case 'live': return live();
@@ -759,6 +763,168 @@ function platform() {
   process.exit(2);
 }
 
+// `mari check` — the whole-project docs validation: every internal link and anchor resolves,
+// the platform nav agrees with the files on disk (missing targets, orphan pages), the
+// community-health files exist (README/LICENSE/CONTRIBUTING + CODE_OF_CONDUCT/SECURITY/
+// CHANGELOG), and each community doc that has an asset archetype passes its structure check.
+// One command a docsite build, a pre-commit hook, or CI can gate on: `mari check --strict`.
+function check() {
+  const root = process.cwd();
+  const config = flag('no-config') ? null : loadConfig(root);
+  const files = walkForPlatforms(root, { maxDepth: 8, maxEntries: 50000 });
+  const READ = /\.(md|mdx|mdc|markdown|rst|adoc)$/i;
+  const NAV_ONLY = /(^|\/)mkdocs\.ya?ml$/i; // non-markdown files the nav parsers need to read
+  const pages = [];
+  for (const p of files) {
+    if (!READ.test(p) && !NAV_ONLY.test(p)) continue;
+    try { pages.push({ path: p, text: readFileSync(join(root, p), 'utf8') }); } catch { /* unreadable — skip */ }
+  }
+
+  // pages include nav configs (mkdocs.yml) for checkNav; checkLinks skips non-markdown itself.
+  let { findings, community } = checkSite(pages, files);
+
+  // Structure-check every community doc that has an asset archetype (CONTRIBUTING, CoC, SECURITY).
+  for (const { name, asset } of communityAssets()) {
+    const path = community[name];
+    if (!path) continue;
+    const page = pages.find((pg) => pg.path === path);
+    if (!page) continue;
+    const ctx = segment(page.text);
+    for (const f of validateAsset(ctx, asset)) findings.push({ ...f, file: path });
+  }
+
+  // Respect rule-level waivers (`ignores add-rule link-broken`), but NOT ignoreFiles — those
+  // scope the PROSE detector ("don't slop-lint README.md"), and a slop waiver must never hide
+  // a structural defect like a broken link in that same file.
+  if (config) findings = findings.filter((f) => !config.ignoreRules.has(f.ruleId));
+  findings.sort((a, b) => (a.file === b.file ? a.line - b.line || a.col - b.col : a.file < b.file ? -1 : 1));
+
+  const platforms = detectPlatforms(files);
+  if (flag('json')) {
+    console.log(JSON.stringify({ platforms, community, findings }, null, 2));
+  } else {
+    console.log(platforms.length
+      ? `Platform: ${platforms.map((p) => `${p.label} (${p.matched.join(', ')})`).join(' · ')}`
+      : 'Platform: none detected — `mari platform list` to set one up.');
+    const present = Object.keys(community).map((k) => `${k} ✓`).join('  ');
+    if (present) console.log(`Community: ${present}`);
+    if (!findings.length) {
+      console.log('\n✓ Project checks clean — links, nav, and community files all in order.');
+    } else {
+      let file = null;
+      const sev = (s) => (s === 'error' ? 'error   ' : s === 'warn' ? 'warn    ' : 'advisory');
+      for (const f of findings) {
+        if (f.file !== file) { file = f.file; console.log(`\n${file}`); }
+        console.log(`  L${String(f.line).padEnd(4)} ${sev(f.severity)} ${f.ruleId.padEnd(24)} ${f.message}`);
+      }
+      const warns = findings.filter((f) => f.severity === 'warn').length;
+      const errors = findings.filter((f) => f.severity === 'error').length;
+      console.log(`\n${findings.length} finding(s) · ${errors} error · ${warns} warn · ${findings.length - errors - warns} advisory`);
+      console.log('Tip: `mari detect .` for the prose-level pass; `mari check --strict` fails on warns (CI/pre-commit).');
+    }
+  }
+  // --deep: attention passes over the public API surface (opt-in, ~3s/run; see attnDecision).
+  // Coverage asks "which extracted symbols do the docs never engage?" (undocumented surface);
+  // grounding asks "which doc sentences engage none of the surface?" (stale/unanchored prose).
+  if (!flag('json') && attnDecision()) deepDocsPass(root, files, pages);
+
+  const warns = findings.filter((f) => f.severity === 'warn').length;
+  const errors = findings.filter((f) => f.severity === 'error').length;
+  process.exitCode = errors > 0 || (flag('strict') && warns > 0) ? 1 : 0;
+}
+
+// Extract the public surface of every source file in the walk → [{ path, items }].
+function surfaceFiles(root, files) {
+  const out = [];
+  for (const p of files) {
+    if (!SOURCE_EXT.test(p) || NOT_SURFACE.test(p)) continue;
+    try {
+      const items = extractSurface(p, readFileSync(join(root, p), 'utf8'));
+      if (items.length) out.push({ path: p, items });
+    } catch { /* unreadable — skip */ }
+  }
+  return out;
+}
+
+// `mari surface [dir]` — print the extracted public API surface (exports / pub / def / func):
+// the deterministic inventory the docsite flow documents against, and the CONTEXT text that
+// `mari check --deep` feeds the attention model.
+function surface() {
+  const root = process.cwd();
+  const dir = positionals()[0];
+  const scope = dir ? dir.replace(/\/+$/, '') : null;
+  const files = walkForPlatforms(root, { maxDepth: 8, maxEntries: 50000 })
+    .filter((p) => !scope || p === scope || p.startsWith(scope + '/'));
+  const fsurf = surfaceFiles(root, files);
+  if (flag('json')) { console.log(JSON.stringify(fsurf, null, 2)); return; }
+  if (!fsurf.length) { console.log(`No public surface found${scope ? ` under ${scope}` : ''} (looked for exports/pub/def/func in JS/TS, Python, Go, Rust).`); return; }
+  process.stdout.write(renderSurface(fsurf).text);
+  console.error(`\n${fsurf.reduce((n, f) => n + f.items.length, 0)} public symbol(s) across ${fsurf.length} file(s).`);
+}
+
+// The attention layer of `mari check --deep`. Context window is small (~4k tokens), so the
+// code side is the rendered SURFACE (signature list), never raw source — chunked per file
+// block for coverage, capped for grounding.
+function deepDocsPass(root, files, pages) {
+  const thr = parseFloat(opt('threshold') || '0.3');
+  const limit = opt('limit') != null ? parseInt(opt('limit'), 10) : 10;
+  const fsurf = surfaceFiles(root, files);
+  if (!fsurf.length) { console.log('\n--deep: no public surface extracted (JS/TS, Python, Go, Rust) — skipping the attention pass.'); return; }
+  // Nav/community/meta files aren't API prose; Mari's own convention files (PRODUCT/STYLE/FACTS)
+  // describe voice and facts, not the surface. Docs-root pages and the README go first so a
+  // --limit'ed grounding pass spends its budget on the pages readers actually use.
+  const NOT_API_DOC = /(^|\/)(_sidebar|_navbar|_coverpage|SUMMARY|CHANGELOG|CODE_OF_CONDUCT|LICENSE|GOVERNANCE|PRODUCT|STYLE|FACTS)\.(md|mdx|markdown)$/i;
+  const docRank = (p) => (/^docs?\//i.test(p) ? 0 : /^readme\./i.test(p) ? 1 : 2);
+  const docs = pages
+    .filter((pg) => /\.(md|mdx|markdown)$/i.test(pg.path) && !NOT_API_DOC.test(pg.path))
+    .sort((a, b) => docRank(a.path) - docRank(b.path) || (a.path < b.path ? -1 : 1));
+  if (!docs.length) { console.log('\n--deep: no docs pages to check the surface against.'); return; }
+
+  const tmp = join(tmpdir(), 'mari-check'); mkdirSync(tmp, { recursive: true });
+  const docsFile = join(tmp, 'docs.md');
+  writeFileSync(docsFile, docs.map((d) => `\n// === ${d.path} ===\n\n${d.text}`).join('\n'));
+
+  // 1) Coverage — surface as CONTEXT, all docs as QUERY: flag symbols no doc prose attends to.
+  console.log('\nDocs coverage of the public surface (attention):');
+  const chunks = chunkSurface(fsurf);
+  const undocumented = new Map(); // file+name → { file, line, name, score }
+  for (const [i, chunk] of chunks.entries()) {
+    const cf = join(tmp, `surface-${i}.txt`);
+    writeFileSync(cf, chunk.text);
+    const res = runMariAttn(cf, docsFile, { grounding: false, threshold: thr });
+    if (res.error) { console.log(`  · surface chunk ${i + 1}/${chunks.length} skipped: ${res.error}`); continue; }
+    for (const f of res.out.flagged || []) {
+      for (const it of itemsOfSpan(chunk, f.text)) {
+        const k = `${it.file}|${it.name}`;
+        if (!undocumented.has(k) || undocumented.get(k).score > f.score) undocumented.set(k, { ...it, score: f.score });
+      }
+    }
+  }
+  if (!undocumented.size) console.log('  ✓ every extracted symbol is engaged by the docs');
+  else {
+    const list = [...undocumented.values()].sort((a, b) => a.score - b.score);
+    for (const u of list) console.log(`  ⚠ ${(u.score * 100).toFixed(0)}%  ${u.file} L${u.line}  ${u.name}`);
+    console.log(`  ${list.length} symbol(s) the docs barely engage — document or deliberately omit them.`);
+  }
+
+  // 2) Grounding — surface as CONTEXT, each docs page as QUERY: flag sentences that attend to
+  // none of the surface (stale after a rename/removal, or never anchored to the code at all).
+  console.log('\nDoc passages unanchored to the current surface (attention):');
+  const ctxFile = join(tmp, 'surface-all.txt');
+  writeFileSync(ctxFile, renderSurface(fsurf).text.slice(0, 24000));
+  const ranked = limit > 0 ? docs.slice(0, limit) : docs;
+  for (const d of ranked) {
+    const res = runMariAttn(ctxFile, join(root, d.path), { grounding: true, threshold: thr, querySegment: 'sentence' });
+    if (res.error) { console.log(`  · ${d.path} skipped: ${res.error}`); continue; }
+    const flagged = res.out.flagged || [];
+    if (!flagged.length) { console.log(`  ✓ ${d.path}`); continue; }
+    console.log(`  ${d.path} — ${flagged.length} passage(s) to re-verify against the code:`);
+    printAttnFindings(flagged, d.text, 'anchored');
+  }
+  if (docs.length > ranked.length) console.log(`  (checked ${ranked.length}/${docs.length} docs pages — raise with --limit N or 0 for all)`);
+  console.log('  Treat these as leads, not verdicts: conceptual prose legitimately floats above the surface.');
+}
+
 // i18n association: list the translations of a doc (or the source, if a translation is given)
 // across the common localization layouts. Powers the hook's "translations may be stale" note.
 const shortenPath = (p) => {
@@ -1085,7 +1251,7 @@ function i18nConformSweep(dir, config) {
   process.exitCode = flag("strict") && drifted > 0 ? 1 : 0;
 }
 
-const PINNABLE = new Set(['audit', 'deslop', 'tighten', 'clarify', 'critique', 'polish', 'document', 'draft', 'outline', 'glossary', 'sharpen', 'soften', 'harden', 'voice', 'cadence', 'format', 'delight', 'adapt', 'localize', 'live', 'factcheck']);
+const PINNABLE = new Set(['audit', 'deslop', 'tighten', 'clarify', 'critique', 'polish', 'document', 'draft', 'outline', 'glossary', 'sharpen', 'soften', 'harden', 'voice', 'cadence', 'format', 'delight', 'adapt', 'localize', 'live', 'factcheck', 'docsite']);
 
 function pin(create) {
   const name = positionals()[0];
@@ -1122,6 +1288,9 @@ Usage:
   mari rules list | discover | add <name> --paths "<glob[,…]>" --notify "<message>" [--exclude "<glob>"] | remove <name>   Notify the agent on matching edits (e.g. update API docs)
   mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC, contributing/code-of-conduct/governance/security) detection, structure check, scaffold
   mari platform detect | list | scaffold <name> [--name "<title>"] [--force]   Set up a docs-as-code site generator (MkDocs, Docusaurus, Sphinx, …) if none exists
+  mari check [--json] [--strict] [--deep [--limit N] [--threshold 0.3]]   Validate the whole project: internal links + anchors, nav ↔ files (missing targets, orphans), community-health files and their structure
+                        (--deep adds the attention passes: public-surface symbols the docs never engage = undocumented; doc sentences that engage no surface = stale. ~3s/run, needs native/attn + a GGUF model)
+  mari surface [dir] [--json]   Print the extracted public API surface (JS/TS, Python, Go, Rust) — the inventory docs are checked against
   mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)
   mari assoc build [--attn] | list [file] | check <file>   Generic semantic association across all files (embeddings + nearest-neighbor); --attn uses attention for the association step

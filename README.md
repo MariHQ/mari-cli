@@ -1,6 +1,6 @@
 # Mari
 
-Editorial guidance for AI writing agents. 1 skill, 21 commands, live in-editor iteration, and 171 deterministic detector rules for AI-generated prose.
+Editorial guidance for AI writing agents. 1 skill, 22 commands, live in-editor iteration, and 171 deterministic detector rules for AI-generated prose.
 
 > **Quick start:** From your project root, run `npx mari install`, then run `/mari init` inside your AI coding or writing tool. Full docs: [mari.style](https://mari.style).
 
@@ -13,7 +13,7 @@ Every model trained on the same internet, then got RLHF'd toward the same regist
 mari is a **design system for text**. It adds:
 
 - **One setup flow.** `/mari init` writes `PRODUCT.md` and offers `STYLE.md` and `FACTS.md`, so every later command knows the audience, register (docs / marketing / editorial / UX microcopy), voice, banned words, terminology, the base style guide you write to (Microsoft, Google, AP, Chicago, plain language), and your ground-truth facts.
-- **21 commands.** A shared editorial vocabulary with your AI: `deslop`, `tighten`, `sharpen`, `clarify`, `critique`, `audit`, `polish`, `factcheck`, and more.
+- **22 commands.** A shared editorial vocabulary with your AI: `deslop`, `tighten`, `sharpen`, `clarify`, `critique`, `audit`, `polish`, `factcheck`, `docsite`, and more.
 - **A detector that runs on any machine.** Deterministic rules (regex/wordlist/density/structural) plus small local encoder models (GLiNER slop-span extraction, a BERT/DeBERTa NLI checker). Both run on CPU: no GPU, no API key, weights cached once. A heavier **generative model is opt-in** for attention-based fact-grounding, and `--no-models` runs pure-deterministic for offline use.
 
 ## What's Included
@@ -34,12 +34,13 @@ Start every new project with:
 
 `init` asks what register you're writing in (technical docs, product UI copy, marketing, or long-form editorial) and which base style guide governs the project, then writes editorial context that every later command reads.
 
-### 21 Commands
+### 22 Commands
 
 All commands are accessed through `/mari`:
 
 | Command | What it does |
 |---------|--------------|
+| `/mari docsite` | Document an entire codebase: choose a platform, derive the architecture, write every page, add community files, validate |
 | `/mari draft` | Outline, then write a piece end-to-end in your voice |
 | `/mari init` | One-time setup: gather voice context, write PRODUCT.md and STYLE.md, configure the hook, recommend next steps |
 | `/mari document` | Generate a house STYLE.md from your existing writing |
@@ -306,6 +307,46 @@ is deterministic and never prompts — it refuses to overwrite existing files an
 before scaffolding (override with `--force`). The **choice** of platform happens in the `/mari`
 skill flow (`skill/reference/platform.md`), which recommends a fit for the repo's stack but lets
 you decide.
+
+## Document a whole codebase (`/mari docsite`)
+
+`platform` gives docs somewhere to live; `docsite` fills the house. One command takes a repo from
+"no docs" to a complete documentation website: survey the code, choose and scaffold a platform,
+derive the information architecture from the actual CLI/API/config surface ([Diátaxis](https://diataxis.fr):
+tutorial, how-to, reference, explanation), write every page grounded in the source, generate the
+community-health files (CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, license and changelog prompts),
+and validate the result until it's clean. The flow lives in `skill/reference/docsite.md`; you
+approve the platform and the page tree before anything gets filled.
+
+The validation gate is deterministic and yours to keep:
+
+```bash
+npx mari check             # validate the whole project in one pass
+npx mari check --strict    # nonzero exit on warns — the CI / pre-commit docs gate
+```
+
+`mari check` verifies, with no network and no model: every internal link and anchor resolves; the
+platform nav agrees with the files on disk (entries that point nowhere, pages orphaned outside the
+nav); the community-health files exist; and each one's structure passes its `asset check`. Pair it
+with the platform's own `build --strict` in CI and docs rot gets caught at commit time.
+
+### Is the whole API documented? Is anything stale?
+
+Structure checks can't tell you whether the docs *cover the code*. The attention layer can — the
+same native primitive that powers i18n coverage and factcheck grounding, pointed at the API:
+
+```bash
+npx mari surface                 # the extracted public surface: every export/pub/def/func, file:line
+npx mari check --deep            # + attention: undocumented symbols, stale doc passages
+```
+
+`mari surface` deterministically extracts the public symbols (JS/TS, Python, Go, Rust) with their
+signatures. `check --deep` then runs two attention passes over that rendered surface: **coverage**
+(surface as context, docs as query) flags the symbols no doc prose ever engages — the undocumented
+API; **grounding** (docs as query) flags doc sentences that engage none of the surface — prose
+that's stale after a rename or was never anchored to the code. Both are leads for review, not
+verdicts, and both run fully locally (~3s per doc; needs the shipped attention binary + a small
+GGUF model, and skips gracefully without them).
 
 ## Localized docs (i18n)
 

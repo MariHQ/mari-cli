@@ -55,8 +55,19 @@ of ground truth — run it first so every edit is grounded in concrete findings,
 - **No argument** → run the detector over the changed/target files, then surface the 2–3
   highest-value commands (many buzzword/cliché hits → `deslop`; long-sentence hits → `tighten`;
   passive/jargon → `clarify`; inclusive/heading/link hits → `audit`). Never auto-edit.
-- **First word is a deterministic command** (`detect`, `audit`, `asset`, `i18n`, `platform`) → run
-  the CLI directly, skipping the setup phase (no `PRODUCT.md` needed):
+- **First word is a deterministic command** (`detect`, `audit`, `asset`, `i18n`, `platform`,
+  `check`) → run the CLI directly, skipping the setup phase (no `PRODUCT.md` needed):
+  - `check` → whole-project validation in one pass: internal links + anchors resolve, the
+    platform nav agrees with the files on disk (missing targets, orphan pages), and the
+    community-health files (README/LICENSE/CONTRIBUTING/CODE_OF_CONDUCT/SECURITY/CHANGELOG)
+    exist and pass their structure checks. `node cli/bin/cli.js check` (`--strict` fails on
+    warns — the CI/pre-commit gate). Add `--deep` for the opt-in attention passes over the
+    public API surface: symbols the docs never engage (undocumented) and doc sentences that
+    engage no symbol (stale/unanchored). ~3s per run — cap with `--limit N`; don't add
+    `--deep` unprompted on big repos.
+  - `surface [dir]` → print the extracted public API surface (JS/TS, Python, Go, Rust
+    exports/pub/def/func with file:line). Deterministic and fast — this is the code
+    inventory `docsite` documents against and `check --deep` validates against.
   - `platform` → set up a docs-as-code site generator if the repo has none. Load
     `skill/reference/platform.md`. Run `node cli/bin/cli.js platform detect`. If nothing is set up,
     **ask the user which platform** (`platform list` shows the options). Then run
@@ -74,6 +85,10 @@ of ground truth — run it first so every edit is grounded in concrete findings,
     `skill/reference/factcheck.md`. For the deep **atomic-claim** pass, YOU do the decomposition
     in-session (the CLI never calls a model or `claude` for it): emit the target sentences, split
     each into atomic claims, write them, and re-run with `--claims`. The reference has the flow.
+- **First word is `docsite`** (or the user asks to "document the whole codebase" / "generate a
+  docs site") → the end-to-end flow in `skill/reference/docsite.md`: survey the code, choose +
+  scaffold a platform, design the information architecture (Diátaxis), fill every page from
+  the code, add the community-health files, then validate with `check --strict`.
 - **First word is an editing command** (`init`, `document`, `draft`, `outline`, `glossary`,
   `critique`, `deslop`, `tighten`, `clarify`, `polish`, `sharpen`, `soften`, `harden`, `voice`,
   `cadence`, `format`, `delight`, `adapt`, `localize`, `live`) → run the setup phase, load
@@ -132,8 +147,9 @@ Final pre-publish pass: resolve the latest `critique` plus all detector findings
 
 Each has its own `skill/reference/<command>.md`; load it before running. Grouped by intent:
 
-- **Build** — `draft` (outline then write a piece end-to-end), `outline` (plan structure before
-  prose), `glossary` (harvest approved terms into `STYLE.md`).
+- **Build** — `docsite` (document an entire codebase: platform + architecture + every page +
+  community files + validation, end to end), `draft` (outline then write a piece end-to-end),
+  `outline` (plan structure before prose), `glossary` (harvest approved terms into `STYLE.md`).
 - **Refine** — `sharpen` (make hedged prose direct), `soften` (tone down hype), `harden`
   (edge-case copy: errors, empty states, microcopy, i18n).
 - **Enhance** — `voice` (inject brand voice into flat copy), `cadence` (fix sentence rhythm),

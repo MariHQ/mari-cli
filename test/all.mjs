@@ -18,6 +18,8 @@ const SUITES = [
   'assets.mjs',
   'i18n.mjs',
   'platforms.mjs',
+  'site.mjs',
+  'surface.mjs',
   'assoc.mjs',
 ];
 
