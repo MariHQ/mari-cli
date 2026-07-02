@@ -1545,7 +1545,8 @@ struct Args {
     bool per_file = false;          // iterate context files individually (tiny windows)
     bool mari_coverage = false;     // Mari mode: flag SOURCE spans the query barely attends to (i18n: dropped content)
     bool mari_grounding = false;    // Mari mode: flag QUERY rows that barely attend to the context (factcheck: ungrounded)
-    double mari_threshold = 0.3;    // flag below this fraction of the peak score
+    bool mari_focus = false;        // Mari mode: emit the HIGH-attention context runs (explore: where the query's mass lands)
+    double mari_threshold = 0.3;    // flag below (coverage/grounding) or at/above (focus) this fraction of the peak score
     bool input_prompt_set = false;
     bool mmproj_use_gpu = true;
     bool check_context = false;     // image mode: plan/tokenize and exit before decode
@@ -1619,6 +1620,7 @@ static Args parse_args(int argc, char ** argv) {
         else if (k == "--per-file") a.per_file = true;
         else if (k == "--mari-coverage") { a.mari_coverage = true; a.per_file = true; }
         else if (k == "--mari-grounding") { a.mari_grounding = true; a.per_file = true; }
+        else if (k == "--mari-focus") { a.mari_focus = true; a.per_file = true; }
         else if (k == "--mari-threshold") a.mari_threshold = std::atof(need(k.c_str()).c_str());
         else if (k == "--image") a.image_path = need("--image");
         else if (k == "--svg" || k == "--image-svg") a.svg_path = need(k.c_str());
@@ -2972,7 +2974,7 @@ static int run_per_file_scan(const Args & args) {
     size_t dumped_inputs = 0;
 
     auto write_json_now = [&]() {
-        if (args.mari_coverage || args.mari_grounding) return;  // Mari emits findings at the end, not a heatmap
+        if (args.mari_coverage || args.mari_grounding || args.mari_focus) return;  // Mari emits findings at the end, not a heatmap
         JsonOut j;
         j.s << "{";
         j.s << "\"context_text\":"; j.escape(global_ctx_text);
@@ -3052,6 +3054,51 @@ static int run_per_file_scan(const Args & args) {
             if (n < args.mari_threshold) {
                 if (!in_run) { in_run = true; run_start = (int) c; run_min = n; }
                 else run_min = std::min(run_min, n);
+            } else if (in_run) { close_run((int) c - 1); in_run = false; }
+        }
+        if (in_run) close_run((int) C - 1);
+        j.s << "]}";
+        std::printf("%s\n", j.s.str().c_str());
+    };
+
+    // Mari focus: the inverse of coverage — emit the CONTEXT runs the query attends to MOST
+    // (at/above `mari_threshold` of the peak). Adjacent high spans merge into one region whose
+    // score is the run's max. For `mari explore --focus`: given a doc/question as the query and
+    // a candidate file as context, these are the places in the file where the attention mass
+    // concentrates.
+    auto write_mari_focus = [&]() {
+        const size_t C = global_ctx_chunks.size();
+        std::vector<double> cov(C, 0.0);
+        for (const auto & row : global_scores)
+            for (size_t c = 0; c < row.size() && c < C; c++) cov[c] += row[c];
+        double peak = 1e-9;
+        for (double v : cov) peak = std::max(peak, v);
+
+        JsonOut j;
+        j.s << "{\"mari_focus\":true,\"source_spans\":" << C
+            << ",\"threshold\":" << args.mari_threshold << ",\"flagged\":[";
+        bool first = true, in_run = false;
+        int run_start = 0; double run_max = 0.0;
+        auto close_run = [&](int end_idx) {
+            std::string text;
+            for (int i = run_start; i <= end_idx; i++) text += global_ctx_chunks[i].text;
+            if (text.size() >= 12) {
+                const Chunk & last = global_ctx_chunks[end_idx];
+                if (!first) j.s << ",";
+                first = false;
+                j.s << "{\"score\":" << run_max
+                    << ",\"offset\":" << global_ctx_chunks[run_start].start
+                    << ",\"end\":" << (last.start + (int) last.text.size())
+                    << ",\"label\":"; j.escape(global_ctx_chunks[run_start].label);
+                j.s << ",\"text\":"; j.escape(text.substr(0, 480));
+                j.s << "}";
+            }
+        };
+        for (size_t c = 0; c < C; c++) {
+            double n = cov[c] / peak;
+            if (n >= args.mari_threshold) {
+                if (!in_run) { in_run = true; run_start = (int) c; run_max = n; }
+                else run_max = std::max(run_max, n);
             } else if (in_run) { close_run((int) c - 1); in_run = false; }
         }
         if (in_run) close_run((int) C - 1);
@@ -3539,10 +3586,11 @@ static int run_per_file_scan(const Args & args) {
     write_json_now();
     if (args.mari_coverage) write_mari_coverage();
     if (args.mari_grounding) write_mari_grounding();
+    if (args.mari_focus) write_mari_focus();
 
     log_line("scan complete: %d/%zu files in %.1fs",
         written_files, ctx_paths.size(), (ggml_time_us() - t_scan_start) / 1e6);
-    if (!args.mari_coverage && !args.mari_grounding) log_line("wrote %s", args.out_path.c_str());
+    if (!args.mari_coverage && !args.mari_grounding && !args.mari_focus) log_line("wrote %s", args.out_path.c_str());
 
     llama_free(ctx);
     llama_model_free(model);

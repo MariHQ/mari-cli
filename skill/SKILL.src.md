@@ -70,7 +70,9 @@ of ground truth — run it first so every edit is grounded in concrete findings,
     inventory `docsite` documents against and `check --deep` validates against.
   - `explore "<question>" | <file>` → RAG search over the repo: top chunks (file:line +
     snippet) for a question, or what relates to a file. `node cli/bin/cli.js explore …`
-    (`--k N` more hits, `--deep` attention rerank ~3s/hit, `--json`). First run embeds the
+    (`--k N` more hits, `--deep` attention rerank ~3s/hit, `--focus` to localize the attention
+    mass inside each top-matched file — slow, use when the exact passage matters, `--json`).
+    First run embeds the
     whole repo into `.mari/assoc` (minutes on a big repo — warn the user); after that,
     queries are ~5s and the index self-maintains from git (changed files re-embed, deleted
     files are revoked, automatically per query). Use it to locate the prose/code a task

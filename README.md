@@ -366,6 +366,12 @@ its head — and with `--deep` the full document becomes the attention context f
 chunk. The attention window sizes itself to the inputs (override the cap with `MARI_ATTN_CTX`;
 default 32768 tokens), so long docs are no longer truncated at a fixed 4k.
 
+`--focus` goes one step further: for each top-matched *file*, it widens from the matched chunk to
+the whole file as attention context and reports where the query's attention mass concentrates —
+the top regions with `≈L` line anchors, scored as a fraction of that file's peak. RAG chooses the
+documents cheaply; attention localizes within them. Slow by design (`--limit N` files,
+`--threshold t` for the bar), and worth it when you want *the exact passage*, not just the file.
+
 Embeddings retrieve (purpose-built `Qwen3-Embedding-0.6B`, local, CPU-friendly); `--deep` then
 scores each hit with the native attention model — how much of the chunk *genuinely engages* the
 question — which separates true matches from vocabulary coincidence. Everything runs locally.

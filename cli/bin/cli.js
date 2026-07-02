@@ -991,7 +991,7 @@ function attnModel() {
   _attnModelCache = (m && existsSync(m)) ? m : null;
   return _attnModelCache;
 }
-function runMariAttn(ctxFile, qryFile, { grounding = false, threshold = 0.3, querySegment = 'paragraph', ctxSize = 0 } = {}) {
+function runMariAttn(ctxFile, qryFile, { grounding = false, mode = null, threshold = 0.3, querySegment = 'paragraph', ctxSize = 0 } = {}) {
   const bin = mariAttnBin();
   const model = attnModel();
   if (!existsSync(bin)) return { error: `attention binary not shipped for ${process.platform}-${process.arch}; set MARI_ATTN_BIN or build native/attn (see native/attn/README.md).` };
@@ -1006,8 +1006,9 @@ function runMariAttn(ctxFile, qryFile, { grounding = false, threshold = 0.3, que
     for (const f of [ctxFile, qryFile]) { try { bytes += statSync(f).size; } catch { /* estimate from the other */ } }
     ctxSize = Math.min(MAX_CTX, Math.max(4096, Math.ceil(bytes / 3) + 1024));
   }
+  const modeFlag = `--mari-${mode || (grounding ? 'grounding' : 'coverage')}`;
   const run = (size) => spawnSync(bin, ['--model', model, '--context', ctxFile, '--query', qryFile,
-    '--query-glob', extname(qryFile).slice(1) || 'md', grounding ? '--mari-grounding' : '--mari-coverage',
+    '--query-glob', extname(qryFile).slice(1) || 'md', modeFlag,
     '--context-segment', 'phrase', '--phrase-tokens', '10', '--query-segment', querySegment,
     '--ctx-size', String(size), '--mari-threshold', String(threshold)], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   let r = run(ctxSize);
@@ -1334,6 +1335,34 @@ async function explore() {
     for (const l of snippetOf(h.text)) console.log(`      ${l}`);
   }
   console.log(`\n(top ${hits.length} by ${deep ? 'attention' : 'embedding'} · --k N for more · ${deep ? '--limit N caps the rerank' : '--deep reranks with attention'} · --build refreshes the index)`);
+
+  // --focus: for the top RAG-matched FILES, widen from the matched chunk to the WHOLE file as
+  // attention context and report where the query's attention mass concentrates (the new
+  // --mari-focus mode). RAG picks the documents cheaply; attention localizes within them.
+  if (flag('focus')) {
+    if (!attnReady()) { console.error('--focus needs the native attention binary + a GGUF model (set MARI_ATTN_MODEL or drop one in ~/.mari/models).'); process.exit(2); }
+    const files = [...new Set(hits.map((h) => h.file))].slice(0, Math.max(1, parseInt(opt('limit') || '6', 10) || 6));
+    const fthr = parseFloat(opt('threshold') || '0.6');
+    console.error(`(focus: attention over ${files.length} whole file(s) — this takes a while)`);
+    const tmp = join(tmpdir(), 'mari-explore'); mkdirSync(tmp, { recursive: true });
+    const qf = join(tmp, isFile ? `query.${excludeFile.split('.').pop()}` : 'query.md');
+    writeFileSync(qf, queryText);
+    console.log(`\nFocus — where the ${isFile ? 'doc' : 'question'}'s attention mass lands (≥${Math.round(fthr * 100)}% of each file's peak):`);
+    for (const file of files) {
+      const abs = join(root, file);
+      let fileText; try { fileText = readFileSync(abs, 'utf8'); } catch { continue; }
+      const res = runMariAttn(abs, qf, { mode: 'focus', threshold: fthr, querySegment: 'sentence' });
+      if (res.error) { console.log(`\n${file}\n  · skipped: ${res.error}`); continue; }
+      const regions = (res.out.flagged || []).sort((a, b) => b.score - a.score).slice(0, 5);
+      console.log(`\n${file}`);
+      if (!regions.length) { console.log('  (no region clears the bar — attention is spread evenly)'); continue; }
+      for (const r of regions) {
+        const line = lineOfSpan(fileText, r.text);
+        console.log(`  ▮ ${(r.score * 100).toFixed(0)}%${line ? `  ≈L${line}` : ''}  ${r.text.replace(/\s+/g, ' ').trim().slice(0, 110)}`);
+      }
+    }
+    console.log(`\n(focus: --limit N files · --threshold t for a looser/stricter bar)`);
+  }
 }
 
 // `mari i18n coverage` — coverage mode with the SOURCE as context and the TRANSLATION as query.
@@ -1512,7 +1541,8 @@ Usage:
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)
   mari assoc build [--attn] | update | list [file] | check <file>   Generic semantic association across all files (embeddings + nearest-neighbor); --attn uses attention for the association step
                         (update syncs the index with the git tree: revokes deleted files, re-embeds changed ones — explore does this automatically on every query)
-  mari explore "<question>" | <file> [--k N] [--deep [--limit N] [--threshold 0.55]] [--json] [--build]   RAG search over the repo: embed the query, return the top chunks (file:line + snippet).
+  mari explore "<question>" | <file> [--k N] [--deep] [--focus] [--limit N] [--threshold t] [--json] [--build]   RAG search over the repo: embed the query, return the top chunks (file:line + snippet).
+                        --focus widens each top-matched FILE to full attention context and prints where the query's attention mass concentrates inside it (≈L, top regions; slow, worth it).
                         A file argument explores from that file's whole content (mean of its chunk embeddings). --deep reranks hits by attention — the fraction of each chunk that
                         engages the query (~3s each; stricter --threshold spreads the scores). The attention window sizes itself to the inputs (cap: MARI_ATTN_CTX, default 32768).
                         First run builds the vector index automatically; afterwards it self-maintains from git.
