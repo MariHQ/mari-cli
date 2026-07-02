@@ -357,9 +357,14 @@ index builds itself on first use:
 ```bash
 npx mari explore "how does the post-edit hook decide what to show the agent"
 npx mari explore docs/quickstart.md        # what in the repo relates to this file?
-npx mari explore "…" --deep                # attention-rerank the top hits (~3s each)
+npx mari explore docs/quickstart.md --deep # …and how strongly, by attention (RAG pre-filters)
 npx mari explore "…" --k 20 --json         # more hits, machine-readable
 ```
+
+A file query is represented by the mean of its chunk embeddings — the whole document, not just
+its head — and with `--deep` the full document becomes the attention context for each candidate
+chunk. The attention window sizes itself to the inputs (override the cap with `MARI_ATTN_CTX`;
+default 32768 tokens), so long docs are no longer truncated at a fixed 4k.
 
 Embeddings retrieve (purpose-built `Qwen3-Embedding-0.6B`, local, CPU-friendly); `--deep` then
 scores each hit with the native attention model — how much of the chunk *genuinely engages* the

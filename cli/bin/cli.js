@@ -18,7 +18,7 @@ import { parseFacts, factcheck, factcheckNLI, factcheckDecomposed, factcheckLook
 import { scoreDocument, renderScore } from '../engine/score.mjs';
 import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, lookbackGrounding, mlSlopFindings, embed, shutdown } from '../engine/ml/index.mjs';
 import { loadClaimsFile } from '../engine/decompose.mjs';
-import { buildAssoc, updateAssoc, parseGitChanges, loadAssoc, saveAssoc, associationsForFile, assocDir, walkFiles as walkAssocFiles } from '../engine/assoc.mjs';
+import { buildAssoc, updateAssoc, parseGitChanges, loadAssoc, saveAssoc, associationsForFile, assocDir, walkFiles as walkAssocFiles, chunkFile } from '../engine/assoc.mjs';
 import { tmpdir } from 'node:os';
 import { segment } from '../engine/segment.mjs';
 import * as LEX from '../engine/lexicons.mjs';
@@ -919,7 +919,10 @@ function deepDocsPass(root, files, pages) {
   // none of the surface (stale after a rename/removal, or never anchored to the code at all).
   console.log('\nDoc passages unanchored to the current surface (attention):');
   const ctxFile = join(tmp, 'surface-all.txt');
-  writeFileSync(ctxFile, renderSurface(fsurf).text.slice(0, 24000));
+  // Cap the grounding context to what the attention window can actually hold (≈3 chars/token
+  // against MARI_ATTN_CTX) rather than an arbitrary constant.
+  const maxChars = 3 * (+(process.env.MARI_ATTN_CTX || 32768));
+  writeFileSync(ctxFile, renderSurface(fsurf).text.slice(0, maxChars));
   const ranked = limit > 0 ? docs.slice(0, limit) : docs;
   for (const d of ranked) {
     const res = runMariAttn(ctxFile, join(root, d.path), { grounding: true, threshold: thr, querySegment: 'sentence' });
@@ -988,21 +991,29 @@ function attnModel() {
   _attnModelCache = (m && existsSync(m)) ? m : null;
   return _attnModelCache;
 }
-function runMariAttn(ctxFile, qryFile, { grounding = false, threshold = 0.3, querySegment = 'paragraph', ctxSize = 4096 } = {}) {
+function runMariAttn(ctxFile, qryFile, { grounding = false, threshold = 0.3, querySegment = 'paragraph', ctxSize = 0 } = {}) {
   const bin = mariAttnBin();
   const model = attnModel();
   if (!existsSync(bin)) return { error: `attention binary not shipped for ${process.platform}-${process.arch}; set MARI_ATTN_BIN or build native/attn (see native/attn/README.md).` };
   if (!model || !existsSync(model)) return { error: 'set MARI_ATTN_MODEL (or attn.model in .mari/config.json) to a multilingual GGUF model.' };
+  // Size the context window from the actual inputs (≈3 chars/token + headroom) instead of a
+  // fixed floor — long docs are the POINT of attention grounding. MARI_ATTN_CTX caps it (memory
+  // and prompt-processing time grow with the window); the extractor's own "use --ctx-size N"
+  // suggestion remains as a retry backstop for anything the estimate misses.
+  const MAX_CTX = +(process.env.MARI_ATTN_CTX || 32768);
+  if (!ctxSize) {
+    let bytes = 0;
+    for (const f of [ctxFile, qryFile]) { try { bytes += statSync(f).size; } catch { /* estimate from the other */ } }
+    ctxSize = Math.min(MAX_CTX, Math.max(4096, Math.ceil(bytes / 3) + 1024));
+  }
   const run = (size) => spawnSync(bin, ['--model', model, '--context', ctxFile, '--query', qryFile,
     '--query-glob', extname(qryFile).slice(1) || 'md', grounding ? '--mari-grounding' : '--mari-coverage',
     '--context-segment', 'phrase', '--phrase-tokens', '10', '--query-segment', querySegment,
     '--ctx-size', String(size), '--mari-threshold', String(threshold)], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   let r = run(ctxSize);
   if (r.status !== 0) {
-    // The extractor knows the size it needed ("use --ctx-size N or more") — retry once with it,
-    // capped so a pathological input can't balloon memory.
     const want = (r.stderr || '').match(/use --ctx-size (\d+)/);
-    const next = want ? Math.min(parseInt(want[1], 10), 32768) : 0;
+    const next = want ? Math.min(parseInt(want[1], 10), MAX_CTX) : 0;
     if (next > ctxSize) r = run(next);
   }
   if (r.status !== 0) return { error: `extractor failed: ${(r.stderr || '').trim().split('\n').pop()}` };
@@ -1063,14 +1074,14 @@ function printCoverageUnder(srcAbs, transRel, srcText, thr) {
 // Everything is embeddings: chunk every file, embed uniformly, shortlist candidate chunk pairs by
 // nearest-neighbor, then ATTENTION decides the semantic association. Any file ↔ any file.
 // attnFn(a, b) → { associated, score }: does attention connect these two chunks, how strongly?
-function attnAssociate(textA, textB) {
+function attnAssociate(textA, textB, { threshold = 0.3 } = {}) {
   try {
     const dir = join(tmpdir(), 'mari-assoc'); mkdirSync(dir, { recursive: true });
     const cf = join(dir, 'a.txt'), qf = join(dir, 'b.txt');
     writeFileSync(cf, textA); writeFileSync(qf, textB);
     // Sentence-level query rows so the score is graded: the fraction of B's rows that actually
     // attend to A. (A single paragraph collapses to one row and can't discriminate.)
-    const res = runMariAttn(cf, qf, { grounding: true, threshold: 0.3, querySegment: 'sentence' });
+    const res = runMariAttn(cf, qf, { grounding: true, threshold, querySegment: 'sentence' });
     if (res.error) return { associated: false, score: 0 };
     const rows = res.out.query_rows || 1;
     const flagged = (res.out.flagged || []).length;
@@ -1251,13 +1262,25 @@ async function explore() {
 
   // A file argument explores FROM that file (its content is the query); free text embeds as-is.
   const isFile = args.length === 1 && existsSync(args[0]) && statSync(args[0]).isFile();
-  const queryText = isFile ? readFileSync(args[0], 'utf8').slice(0, 4000) : args.join(' ');
+  const queryText = isFile ? readFileSync(args[0], 'utf8') : args.join(' ');
   const excludeFile = isFile ? toPosix(relative(root, args[0]) || args[0]) : null;
 
-  // Query-side instruction prefix (Qwen embedding convention: instruct the query, keep the
-  // documents raw) — free text is a QUESTION, so tell the embedder that; a file query is
-  // document-shaped already and stays raw like the chunks it's matched against.
-  const [qv] = await embed([queryText], isFile ? {} : { instruct: 'Given a question about this code repository, retrieve the file chunks that answer it' });
+  // Embed the query. A FILE is represented by the mean of its chunk embeddings — the whole doc,
+  // not just its head (the embedder truncates a single long text at its token limit). Free text
+  // gets the Qwen query-side instruction prefix (documents stay raw).
+  let qv;
+  if (isFile) {
+    const cs = chunkFile(queryText, excludeFile);
+    const vs = await embed(cs.length ? cs.map((c) => c.text) : [queryText]);
+    const dim = vs[0]?.length || 0;
+    const sum = new Array(dim).fill(0);
+    let n = 0;
+    for (const v of vs) { if (v?.length === dim) { for (let i = 0; i < dim; i++) sum[i] += v[i]; n++; } }
+    const norm = Math.sqrt(sum.reduce((s, x) => s + x * x, 0)) || 1;
+    qv = n ? sum.map((x) => x / norm) : null;
+  } else {
+    [qv] = await embed([queryText], { instruct: 'Given a question about this code repository, retrieve the file chunks that answer it' });
+  }
   if (!qv?.length) { console.error('Embedding the query failed.'); process.exit(2); }
   // Over-fetch, then cap hits per file — exploration wants the top PLACES in the repo, and one
   // large file would otherwise monopolize the list with near-duplicate chunks.
@@ -1289,8 +1312,12 @@ async function explore() {
   if (deep) {
     if (!attnReady()) { console.error('--deep needs the native attention binary + a GGUF model (set MARI_ATTN_MODEL or drop one in ~/.mari/models).'); process.exit(2); }
     const top = Math.min(hits.length, Math.max(1, parseInt(opt('limit') || '8', 10) || 8));
+    // Stricter engagement bar for reranking than for build-time association: RAG already
+    // shortlisted topically-related chunks, so a loose threshold saturates every score at 1.
+    // Tune per query with --threshold.
+    const thr = parseFloat(opt('threshold') || '0.55');
     console.error(`(attention rerank of the top ${top} hits — ~3s each)`);
-    for (const h of hits.slice(0, top)) h.attn = attnAssociate(queryText, h.text).score;
+    for (const h of hits.slice(0, top)) h.attn = attnAssociate(queryText, h.text, { threshold: thr }).score;
     hits.sort((a, b) => (b.attn ?? -1) - (a.attn ?? -1) || b.sim - a.sim);
   }
 
@@ -1483,8 +1510,10 @@ Usage:
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)
   mari assoc build [--attn] | update | list [file] | check <file>   Generic semantic association across all files (embeddings + nearest-neighbor); --attn uses attention for the association step
                         (update syncs the index with the git tree: revokes deleted files, re-embeds changed ones — explore does this automatically on every query)
-  mari explore "<question>" | <file> [--k N] [--deep] [--json] [--build]   RAG search over the repo: embed the query, return the top chunks (file:line + snippet).
-                        A file argument finds what relates to that file. --deep reranks hits with attention (~3s each). First run builds the vector index automatically.
+  mari explore "<question>" | <file> [--k N] [--deep [--limit N] [--threshold 0.55]] [--json] [--build]   RAG search over the repo: embed the query, return the top chunks (file:line + snippet).
+                        A file argument explores from that file's whole content (mean of its chunk embeddings). --deep reranks hits by attention — the fraction of each chunk that
+                        engages the query (~3s each; stricter --threshold spreads the scores). The attention window sizes itself to the inputs (cap: MARI_ATTN_CTX, default 32768).
+                        First run builds the vector index automatically; afterwards it self-maintains from git.
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
   mari pin <command>      Create a /<command> shortcut (.claude/commands/<command>.md)
   mari unpin <command>    Remove a pinned shortcut
