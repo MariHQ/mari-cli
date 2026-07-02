@@ -26,6 +26,7 @@ import { detectAssetType, validateAsset, scaffold, ASSET_TYPES } from '../engine
 import { detectPlatforms, scaffoldPlatform, scaffoldablePlatforms, platformSpec } from '../engine/platforms.mjs';
 import { checkSite, communityAssets } from '../engine/site.mjs';
 import { extractSurface, renderSurface, chunkSurface, itemsOfSpan, SOURCE_EXT, NOT_SURFACE } from '../engine/surface.mjs';
+import { stripComments, CODE_EXT } from '../engine/comments.mjs';
 import { i18nAssociations, i18nConform } from '../engine/i18n.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1320,7 +1321,11 @@ async function explore() {
     // Tune per query with --threshold.
     const thr = parseFloat(opt('threshold') || '0.55');
     console.error(`(attention rerank of ${top === hits.length ? `all ${top}` : `the top ${top}`} hits — ~3s each)`);
-    for (const h of hits.slice(0, top)) h.attn = attnAssociate(queryText, h.text, { threshold: thr }).score;
+    // Comments are prose — against a prose query they soak up the attention mass and the code
+    // itself gets outshouted. Strip them from code chunks before attention (display keeps the
+    // original text); --keep-comments opts out.
+    const strip = (text, p) => (!flag('keep-comments') && CODE_EXT.test(p) ? stripComments(text, p) : text);
+    for (const h of hits.slice(0, top)) h.attn = attnAssociate(strip(queryText, excludeFile || ''), strip(h.text, h.file), { threshold: thr }).score;
     hits.sort((a, b) => (b.attn ?? -1) - (a.attn ?? -1) || b.sim - a.sim);
   }
 
@@ -1345,13 +1350,22 @@ async function explore() {
     const fthr = parseFloat(opt('threshold') || '0.6');
     console.error(`(focus: attention over ${files.length} whole file(s) — this takes a while)`);
     const tmp = join(tmpdir(), 'mari-explore'); mkdirSync(tmp, { recursive: true });
+    const keep = flag('keep-comments');
     const qf = join(tmp, isFile ? `query.${excludeFile.split('.').pop()}` : 'query.md');
-    writeFileSync(qf, queryText);
+    writeFileSync(qf, !keep && isFile && CODE_EXT.test(excludeFile) ? stripComments(queryText, excludeFile) : queryText);
     console.log(`\nFocus — where the ${isFile ? 'doc' : 'question'}'s attention mass lands (≥${Math.round(fthr * 100)}% of each file's peak):`);
     for (const file of files) {
       const abs = join(root, file);
       let fileText; try { fileText = readFileSync(abs, 'utf8'); } catch { continue; }
-      const res = runMariAttn(abs, qf, { mode: 'focus', threshold: fthr, querySegment: 'sentence' });
+      // Code files go to attention comment-stripped (blanked, offsets preserved — the stripped
+      // copy has identical line numbers, so ≈L anchors map back to the real file).
+      let ctxPath = abs;
+      if (!keep && CODE_EXT.test(file)) {
+        fileText = stripComments(fileText, file);
+        ctxPath = join(tmp, `ctx.${file.split('/').pop()}`);
+        writeFileSync(ctxPath, fileText);
+      }
+      const res = runMariAttn(ctxPath, qf, { mode: 'focus', threshold: fthr, querySegment: 'sentence' });
       if (res.error) { console.log(`\n${file}\n  · skipped: ${res.error}`); continue; }
       const regions = (res.out.flagged || []).sort((a, b) => b.score - a.score).slice(0, 5);
       console.log(`\n${file}`);
@@ -1543,6 +1557,7 @@ Usage:
                         (update syncs the index with the git tree: revokes deleted files, re-embeds changed ones — explore does this automatically on every query)
   mari explore "<question>" | <file> [--k N] [--deep] [--focus] [--limit N] [--threshold t] [--json] [--build]   RAG search over the repo: embed the query, return the top chunks (file:line + snippet).
                         --focus widens each top-matched FILE to full attention context and prints where the query's attention mass concentrates inside it (≈L, top regions; slow, worth it).
+                        Code comments are stripped before attention by default (they're prose and soak up the mass) — pass --keep-comments to keep them.
                         A file argument explores from that file's whole content (mean of its chunk embeddings). --deep reranks hits by attention — the fraction of each chunk that
                         engages the query (~3s each; stricter --threshold spreads the scores). The attention window sizes itself to the inputs (cap: MARI_ATTN_CTX, default 32768).
                         First run builds the vector index automatically; afterwards it self-maintains from git.

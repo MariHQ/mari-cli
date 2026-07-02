@@ -4,6 +4,7 @@
 // flagged attention spans back to source symbols. All pure — synthetic sources, no fs.
 
 import { extractSurface, renderSurface, chunkSurface, itemsOfSpan, SOURCE_EXT, NOT_SURFACE } from '../cli/engine/surface.mjs';
+import { stripComments, CODE_EXT } from '../cli/engine/comments.mjs';
 
 let pass = 0, fail = 0;
 const check = (name, cond, extra = '') => { if (cond) pass++; else { fail++; console.log('  ✗ ' + name + (extra ? '  ' + extra : '')); } };
@@ -111,6 +112,29 @@ check('NOT_SURFACE keeps real source', !NOT_SURFACE.test('cli/engine/site.mjs') 
   check('multi-line span → both symbols', names(multi).includes('checkLinks') && names(multi).includes('checkNav'));
   check('span with header prefix is stripped', itemsOfSpan(rendered, '// === src/a.mjs ===\nexport function checkLinks(pages, paths)')[0].name === 'checkLinks');
   check('unmatchable span → empty', itemsOfSpan(rendered, 'totally unrelated words').length === 0);
+}
+
+// --- stripComments: blank comments for attention prep, offsets/strings preserved -------------
+{
+  const js = 'const u = "https://x.com"; // trailing note\n/* block\ncomment */\nconst t = `a // not comment`;\n';
+  const out = stripComments(js, 'a.ts');
+  check('js: line comment blanked', !out.includes('trailing note'));
+  check('js: block comment blanked across lines', !out.includes('block') && !out.includes('comment */'));
+  check('js: // inside a string survives', out.includes('https://x.com'));
+  check('js: // inside a template literal survives', out.includes('a // not comment'));
+  check('strip preserves length', out.length === js.length);
+  check('strip preserves newlines (line anchors hold)', out.split('\n').length === js.split('\n').length);
+
+  const py = 'x = "# not a comment"  # real comment\ns = """docstring # kept"""\n';
+  const pout = stripComments(py, 'm.py');
+  check('py: # comment blanked', !pout.includes('real comment'));
+  check('py: # inside string survives', pout.includes('# not a comment'));
+  check('py: triple-quoted string untouched', pout.includes('docstring # kept'));
+
+  check('sql: -- comment blanked', !stripComments("SELECT a -- pick a\nFROM t WHERE b = '--x';\n", 'q.sql').includes('pick a'));
+  check("sql: '--' inside a literal survives", stripComments("WHERE b = '--x' -- c\n", 'q.sql').includes("'--x'"));
+  check('markdown passes through untouched', stripComments('# heading, not a comment\n', 'a.md') === '# heading, not a comment\n');
+  check('CODE_EXT covers code, not prose', CODE_EXT.test('a/b.rs') && CODE_EXT.test('x.py') && !CODE_EXT.test('doc.md'));
 }
 
 console.log(`\nSurface checks: ${pass + fail} · ${pass} passed · ${fail} failed`);

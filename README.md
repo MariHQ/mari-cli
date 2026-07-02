@@ -372,6 +372,13 @@ the top regions with `≈L` line anchors, scored as a fraction of that file's pe
 documents cheaply; attention localizes within them. Slow by design (`--limit N` files,
 `--threshold t` for the bar), and worth it when you want *the exact passage*, not just the file.
 
+Code comments are stripped before anything reaches the attention model (in both `--deep` and
+`--focus`): comments are prose, and against a prose query they soak up the attention mass while
+the code gets outshouted. Stripping is string-aware (`"https://…"` and `x = "# not a comment"`
+survive) and blanks rather than deletes, so line anchors stay true. Retrieval still sees the full
+text — comments help you *find* the file; they just don't get to *win* the attention ranking.
+Pass `--keep-comments` to opt out.
+
 Embeddings retrieve (purpose-built `Qwen3-Embedding-0.6B`, local, CPU-friendly); `--deep` then
 scores each hit with the native attention model — how much of the chunk *genuinely engages* the
 question — which separates true matches from vocabulary coincidence. Everything runs locally.
