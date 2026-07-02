@@ -1236,7 +1236,7 @@ async function explore() {
   const root = process.cwd();
   const args = positionals();
   if (!args.length && !flag('build')) { console.error(EXPLORE_USAGE); process.exit(2); }
-  const k = Math.max(1, parseInt(opt('k') || '12', 10) || 12);
+  const k = Math.max(1, parseInt(opt('k') || '20', 10) || 20);
   const lanceDir = join(assocDir(root), 'lance');
   const { lanceSearch } = await import('../engine/assoc-lance.mjs');
 
@@ -1311,12 +1311,14 @@ async function explore() {
   const deep = flag('deep');
   if (deep) {
     if (!attnReady()) { console.error('--deep needs the native attention binary + a GGUF model (set MARI_ATTN_MODEL or drop one in ~/.mari/models).'); process.exit(2); }
-    const top = Math.min(hits.length, Math.max(1, parseInt(opt('limit') || '8', 10) || 8));
+    // Rerank EVERY retrieved hit — RAG is the pre-filter, attention is the ranking. --limit
+    // caps it when you want the speed back.
+    const top = opt('limit') != null ? Math.min(hits.length, Math.max(1, parseInt(opt('limit'), 10) || hits.length)) : hits.length;
     // Stricter engagement bar for reranking than for build-time association: RAG already
     // shortlisted topically-related chunks, so a loose threshold saturates every score at 1.
     // Tune per query with --threshold.
     const thr = parseFloat(opt('threshold') || '0.55');
-    console.error(`(attention rerank of the top ${top} hits — ~3s each)`);
+    console.error(`(attention rerank of ${top === hits.length ? `all ${top}` : `the top ${top}`} hits — ~3s each)`);
     for (const h of hits.slice(0, top)) h.attn = attnAssociate(queryText, h.text, { threshold: thr }).score;
     hits.sort((a, b) => (b.attn ?? -1) - (a.attn ?? -1) || b.sim - a.sim);
   }
@@ -1331,7 +1333,7 @@ async function explore() {
     console.log(`\n${String(i + 1).padStart(2)}. ${h.file} L${h.start}-${h.end}  (${score})`);
     for (const l of snippetOf(h.text)) console.log(`      ${l}`);
   }
-  console.log(`\n(top ${hits.length} by ${deep ? 'attention' : 'embedding'} · --k N for more · ${deep ? '--limit N reranks more' : '--deep reranks with attention'} · --build refreshes the index)`);
+  console.log(`\n(top ${hits.length} by ${deep ? 'attention' : 'embedding'} · --k N for more · ${deep ? '--limit N caps the rerank' : '--deep reranks with attention'} · --build refreshes the index)`);
 }
 
 // `mari i18n coverage` — coverage mode with the SOURCE as context and the TRANSLATION as query.
