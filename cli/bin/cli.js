@@ -877,7 +877,7 @@ function deepDocsPass(root, files, pages) {
   // (*.api.mdx, docusaurus-plugin-openapi-docs) are JSX renderings of the spec, not prose.
   // Docs-root pages and the README go first so a --limit'ed grounding pass spends its budget
   // on the pages readers actually use.
-  const NOT_API_DOC = /(^|\/)(_sidebar|_navbar|_coverpage|SUMMARY|CHANGELOG|CODE_OF_CONDUCT|LICENSE|GOVERNANCE|PRODUCT|STYLE|FACTS)\.(md|mdx|markdown)$|(^|\/)(blog|news|_posts)\/|\.api\.mdx$/i;
+  const NOT_API_DOC = /(^|\/)(_sidebar|_navbar|_coverpage|SUMMARY|CHANGELOG|CODE_OF_CONDUCT|LICENSE|GOVERNANCE|PRODUCT|STYLE|FACTS)\.(md|mdx|markdown)$|(^|\/)(blog|news|_posts|vendor|vendored|3rdparty|third[-_]?party)\/|\.api\.mdx$/i;
   const docRank = (p) => (/^docs?\//i.test(p) ? 0 : /^readme\./i.test(p) ? 1 : 2);
   const docs = pages
     .filter((pg) => /\.(md|mdx|markdown)$/i.test(pg.path) && !NOT_API_DOC.test(pg.path))

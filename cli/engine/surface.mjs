@@ -17,7 +17,7 @@
 export const SOURCE_EXT = /\.(mjs|cjs|js|jsx|ts|tsx|py|go|rs)$/i;
 
 // Paths that are code but not *surface*: tests, fixtures, generated bundles, examples.
-export const NOT_SURFACE = /(^|\/)(tests?|__tests__|fixtures?|examples?|benchmarks?|scripts?|dist|build|vendor|node_modules|\.[^/]+)(\/|$)|(\.|_)(test|spec)\.[a-z]+$|\.d\.ts$|\.min\.js$/i;
+export const NOT_SURFACE = /(^|\/)(tests?|__tests__|fixtures?|examples?|benchmarks?|scripts?|dist|build|vendor|vendored|3rdparty|third[-_]?party|node_modules|\.[^/]+)(\/|$)|(\.|_)(test|spec)\.[a-z]+$|\.d\.ts$|\.min\.js$/i;
 
 const LANGS = [
   {

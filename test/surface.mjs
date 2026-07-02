@@ -65,6 +65,7 @@ check('unknown extension → empty', extractSurface('style.css', 'a{}').length =
 check('SOURCE_EXT matches source, not markdown', SOURCE_EXT.test('a/b.mjs') && SOURCE_EXT.test('a.py') && !SOURCE_EXT.test('a.md'));
 check('NOT_SURFACE skips tests', NOT_SURFACE.test('test/foo.mjs') && NOT_SURFACE.test('src/a.test.ts') && NOT_SURFACE.test('src/a_test.py') && NOT_SURFACE.test('src/x.spec.js'));
 check('NOT_SURFACE skips dist/vendor/dotdirs', NOT_SURFACE.test('dist/x.js') && NOT_SURFACE.test('vendor/y.go') && NOT_SURFACE.test('.venv/z.py'));
+check('NOT_SURFACE skips vendored 3rdparty trees', NOT_SURFACE.test('3rdparty/otel/a.go') && NOT_SURFACE.test('third_party/x/y.py'));
 check('NOT_SURFACE keeps real source', !NOT_SURFACE.test('cli/engine/site.mjs') && !NOT_SURFACE.test('src/lib.rs'));
 
 // --- renderSurface: text + line map agree ---
