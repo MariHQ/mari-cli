@@ -38,6 +38,11 @@ check('security-guide.md is not auto-classified by name', typeOf('security-guide
 check('CONTRIBUTING mentioning code of conduct stays contributing', typeOf('CONTRIBUTING.md', '# Contributing\n## How to Contribute\nx\n## Code of Conduct\nSee CODE_OF_CONDUCT.md') === 'contributing');
 
 // structure validation: an incomplete SECURITY.md warns on the missing required section
+// Headings that wrap a term in a markdown link still match their section alias (Marquez-style
+// "# Submitting a [Pull Request](url)").
+const linkedHeading = validateAsset(segment('# Submitting a [Pull Request](https://x)\n\ntext\n'), 'contributing');
+check('linked heading matches its section alias', !linkedHeading.some((f) => f.span === 'Pull Request Process'), `(${linkedHeading.map((f) => f.span).join(',')})`);
+
 const incompleteSec = validateAsset(segment('# Security Policy\n## Supported Versions\n| latest | yes |'), 'security');
 check('security missing Reporting a Vulnerability warns', incompleteSec.some((f) => f.severity === 'warn' && /Reporting a Vulnerability/.test(f.message)));
 

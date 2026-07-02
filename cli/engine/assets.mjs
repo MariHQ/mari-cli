@@ -10,9 +10,10 @@
 // Detection is deliberately TOLERANT (tools like Log4brains enforce "no structure"), and
 // structure checks WARN rather than fail — a half-written draft legitimately lacks sections.
 
-// Normalize a heading for matching: lowercase, strip markdown/markers and list numbering.
+// Normalize a heading for matching: lowercase, unwrap markdown links ("Submitting a
+// [Pull Request](url)" must match "submitting a pull request"), strip markers and numbering.
 function norm(s) {
-  return String(s).toLowerCase().replace(/[`*_#:]/g, '').replace(/^\d+[.)]\s*/, '').replace(/\s+/g, ' ').trim();
+  return String(s).toLowerCase().replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*_#:]/g, '').replace(/^\d+[.)]\s*/, '').replace(/\s+/g, ' ').trim();
 }
 // A section is present if a heading equals an alias or starts with it at a WORD boundary —
 // "Context and Problem Statement" matches "context", but "Non-goals" does not match "goals"
