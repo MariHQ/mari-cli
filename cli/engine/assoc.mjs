@@ -202,6 +202,112 @@ export function loadVectorCache(root) {
   return m;
 }
 
+// ── incremental maintenance (git-driven) ────────────────────────────────────────────────────────
+// The index stamps the git HEAD it was built at; on each invocation the CLI diffs that against
+// the current tree and feeds the CANDIDATE change set here. Candidates are verified by content
+// hash against filesMeta (a dirty-but-identical file re-embeds nothing), then: revoked files
+// lose their vectors and associations; changed/added files are re-chunked, re-embedded, and
+// re-associated against the existing store. Wholesale rebuild stays `buildAssoc`.
+
+// Parse git change output into { modified, deleted } repo-relative path lists.
+// `nameStatus` = `git diff --name-status <indexedHead>..HEAD`; `porcelain` = `git status
+// --porcelain` (working tree + untracked). Renames/copies count as delete-old + modify-new.
+export function parseGitChanges(nameStatus, porcelain) {
+  const modified = new Set(), deleted = new Set();
+  const unquote = (p) => p.trim().replace(/^"(.*)"$/, '$1');
+  for (const line of String(nameStatus || '').split('\n')) {
+    const m = line.match(/^([A-Z])\d*\t([^\t]+)(?:\t(.+))?$/);
+    if (!m) continue;
+    const [, st, a, b] = m;
+    if (st === 'D') deleted.add(unquote(a));
+    else if ((st === 'R' || st === 'C') && b) { deleted.add(unquote(a)); modified.add(unquote(b)); }
+    else modified.add(unquote(a));
+  }
+  for (const line of String(porcelain || '').split('\n')) {
+    if (line.trim().length < 4) continue;
+    const xy = line.slice(0, 2), rest = line.slice(3);
+    const arrow = rest.indexOf(' -> ');
+    if (arrow >= 0) { deleted.add(unquote(rest.slice(0, arrow))); modified.add(unquote(rest.slice(arrow + 4))); continue; }
+    const p = unquote(rest);
+    if (xy.includes('D')) deleted.add(p); else modified.add(p);
+  }
+  for (const p of modified) deleted.delete(p); // deleted-then-recreated → just modified
+  return { modified: [...modified], deleted: [...deleted] };
+}
+
+// Apply a candidate change set to an existing index + Lance store. Returns updated index and
+// what actually happened (candidates that hash-verify as unchanged cost nothing).
+export async function updateAssoc(root, {
+  index, embedFn, lanceDir, candidates,
+  cosThreshold = +(process.env.MARI_ASSOC_COS || 0.35), annK = 8, onProgress = () => {},
+} = {}) {
+  if (!index?.filesMeta) throw new Error('updateAssoc needs an index with filesMeta — run a full build first.');
+  const lance = await import('./assoc-lance.mjs');
+  const filesMeta = index.filesMeta;
+  const indexable = (rel) => TEXT_EXT.has(extname(rel).toLowerCase()) && !TEST_FILE.test(rel.split('/').pop());
+
+  // Verify candidates against reality: hashes decide re-embedding, existence decides revocation.
+  const modified = [], deleted = [];
+  for (const rel of candidates?.deleted || []) {
+    if (filesMeta[rel] && !existsSync(join(root, rel))) deleted.push(rel);
+  }
+  for (const rel of candidates?.modified || []) {
+    const abs = join(root, rel);
+    if (!existsSync(abs)) { if (filesMeta[rel]) deleted.push(rel); continue; }
+    if (!indexable(rel)) continue;
+    let text; try { if (statSync(abs).size > MAX_FILE_BYTES) continue; text = readFileSync(abs, 'utf8'); } catch { continue; }
+    const hash = sha1(text);
+    if (filesMeta[rel]?.hash === hash) continue; // dirty in git terms, identical in content
+    modified.push({ rel, text, hash });
+  }
+  if (!modified.length && !deleted.length) return { index, stats: { modified: 0, deleted: 0, chunks: 0, associations: 0 } };
+
+  // Revoke: vectors and associations of every touched file (modified files re-add below).
+  const gone = new Set([...deleted, ...modified.map((m) => m.rel)]);
+  index.associations = (index.associations || []).filter((x) => !gone.has(x.a.file) && !gone.has(x.b.file));
+  await lance.lanceDeleteFiles(lanceDir, [...gone]);
+  for (const rel of deleted) delete filesMeta[rel];
+
+  // Re-chunk + re-embed the changed files, append to the store.
+  const chunks = [];
+  for (const m of modified) {
+    const cs = chunkFile(m.text, m.rel);
+    for (const c of cs) { c._fhash = m.hash; chunks.push(c); }
+    filesMeta[m.rel] = { hash: m.hash, chunks: cs.length };
+  }
+  onProgress(`${deleted.length} file(s) revoked · re-embedding ${chunks.length} chunk(s) from ${modified.length} file(s)`);
+  const vecs = [];
+  const BATCH = +(process.env.MARI_ASSOC_EMBED_BATCH || 128);
+  for (let b = 0; b < chunks.length; b += BATCH) vecs.push(...await embedFn(chunks.slice(b, b + BATCH).map((c) => c.text)));
+  await lance.lanceAdd(lanceDir, chunks, vecs);
+
+  // Re-associate the new chunks against the whole store (embedding recall, same floor as build).
+  let added = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    if (!vecs[i]?.length) continue;
+    const near = await lance.lanceSearch(lanceDir, vecs[i], { k: annK, excludeFile: chunks[i].file });
+    for (const n of near) {
+      if (n.sim < cosThreshold) continue;
+      const other = { file: n.file, id: n.id.split('#').pop(), startLine: n.start, endLine: n.end };
+      index.associations.push(mkAssoc(chunks[i], other, round(n.sim), 'embedding'));
+      added++;
+    }
+  }
+  // Two updated chunks can rediscover each other from both sides — dedupe symmetric pairs.
+  const seen = new Set();
+  index.associations = index.associations.filter((x) => {
+    const k1 = `${x.a.file}#${x.a.span}|${x.b.file}#${x.b.span}`;
+    const k2 = `${x.b.file}#${x.b.span}|${x.a.file}#${x.a.span}`;
+    if (seen.has(k1) || seen.has(k2)) return false;
+    seen.add(k1);
+    return true;
+  });
+  index.associations.sort((x, y) => y.score - x.score);
+  index.files = Object.keys(filesMeta).length;
+  index.chunks = Object.values(filesMeta).reduce((n, f) => n + (f.chunks || 0), 0);
+  return { index, stats: { modified: modified.length, deleted: deleted.length, chunks: chunks.length, associations: added } };
+}
+
 // ── lookup (symmetric — either side may be the edited file) ─────────────────────────────────────
 export function associationsForFile(index, relPath) {
   if (!index?.associations) return [];

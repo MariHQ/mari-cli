@@ -1,7 +1,7 @@
 // Tests for the uniform semantic-association engine. Models are injected, so we use a
 // deterministic bag-of-words fake embedder: chunks sharing vocabulary get high cosine. This
 // exercises chunking, nearest-neighbor recall, association, persistence, and lookup — no models.
-import { walkFiles, chunkFile, cosine, buildAssoc, saveAssoc, loadAssoc, associationsForFile } from '../cli/engine/assoc.mjs';
+import { walkFiles, chunkFile, cosine, buildAssoc, updateAssoc, parseGitChanges, saveAssoc, loadAssoc, associationsForFile } from '../cli/engine/assoc.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -97,6 +97,60 @@ ok(!walkFiles(dir).includes('src/charge.test.js'), 'walkFiles skips *.test.js');
   const excl = await lance.lanceSearch(ldir, qv, { k: 3, excludeFile: 'a.md' });
   ok(excl.every((h) => h.file !== 'a.md'), 'lanceSearch excludeFile filters the source file');
   ok((await lance.lanceSearch(join(dir, 'nope'), qv, { k: 2 })).length === 0, 'lanceSearch on a missing store returns []');
+}
+
+// --- parseGitChanges: name-status + porcelain → candidate change set --------------------------
+{
+  const c = parseGitChanges(
+    'M\tsrc/a.js\nA\tdocs/new.md\nD\tdocs/old.md\nR100\tsrc/before.js\tsrc/after.js\n',
+    ' M dirty.md\n?? untracked.md\n D removed.md\nR  moved.md -> moved2.md\n');
+  ok(c.modified.includes('src/a.js') && c.modified.includes('docs/new.md'), 'diff M/A are modified');
+  ok(c.deleted.includes('docs/old.md'), 'diff D is deleted');
+  ok(c.deleted.includes('src/before.js') && c.modified.includes('src/after.js'), 'rename = delete old + modify new');
+  ok(c.modified.includes('dirty.md') && c.modified.includes('untracked.md'), 'porcelain dirty + untracked are modified');
+  ok(c.deleted.includes('removed.md'), 'porcelain D is deleted');
+  ok(c.deleted.includes('moved.md') && c.modified.includes('moved2.md'), 'porcelain rename splits old/new');
+  const re = parseGitChanges('D\tx.md\n', '?? x.md\n');
+  ok(re.modified.includes('x.md') && !re.deleted.includes('x.md'), 'deleted-then-recreated counts as modified');
+  ok(parseGitChanges('', '').modified.length === 0, 'empty output → no candidates');
+}
+
+// --- incremental update: revoke deleted, re-embed changed, skip untouched ---------------------
+{
+  const udir = mkdtempSync(join(tmpdir(), 'mari-assoc-upd-'));
+  const lanceDir = join(udir, '.mari', 'assoc', 'lance');
+  mkdirSync(join(udir, 'src'), { recursive: true }); mkdirSync(join(udir, 'docs'), { recursive: true });
+  writeFileSync(join(udir, 'docs/payments.md'), '# Payments\n\nThe payment processor charges the customer card and emits a receipt event for every transaction.\n');
+  writeFileSync(join(udir, 'src/charge.js'), 'export function chargeCard(payment) {\n  // charges the customer card and emits a receipt event for the transaction\n  return payment;\n}\n');
+  writeFileSync(join(udir, 'docs/weather.md'), '# Weather\n\nTomorrow brings scattered rain, sunshine, and mild wind across the northern valley region.\n');
+  const { index: uidx } = await buildAssoc(udir, { embedFn, lanceDir, cosThreshold: 0.25, annK: 5 });
+
+  // 1) hash-verify: a "candidate" whose content didn't change costs nothing
+  const noop = await updateAssoc(udir, { index: uidx, embedFn, lanceDir,
+    candidates: { modified: ['docs/payments.md'], deleted: [] } });
+  ok(noop.stats.modified === 0 && noop.stats.chunks === 0, 'unchanged candidate re-embeds nothing');
+
+  // 2) delete weather.md, change charge.js to be about weather, add a refunds doc
+  rmSync(join(udir, 'docs/weather.md'));
+  writeFileSync(join(udir, 'src/charge.js'), 'export function forecast() {\n  // scattered rain, sunshine, and mild wind across the northern valley region tomorrow\n  return "weather";\n}\n');
+  writeFileSync(join(udir, 'docs/refunds.md'), '# Refunds\n\nThe refund processor reverses the customer card charge and emits a refund receipt event.\n');
+  const upd = await updateAssoc(udir, { index: uidx, embedFn, lanceDir, cosThreshold: 0.25, annK: 5,
+    candidates: { modified: ['src/charge.js', 'docs/refunds.md'], deleted: ['docs/weather.md'] } });
+  ok(upd.stats.deleted === 1 && upd.stats.modified === 2, `revokes 1, re-embeds 2 (got d${upd.stats.deleted} m${upd.stats.modified})`);
+  ok(!uidx.filesMeta['docs/weather.md'] && uidx.filesMeta['docs/refunds.md'], 'filesMeta follows the tree');
+  ok(uidx.associations.every((a) => a.a.file !== 'docs/weather.md' && a.b.file !== 'docs/weather.md'), 'deleted file loses its associations');
+  const refundHits = associationsForFile(uidx, 'docs/refunds.md');
+  ok(refundHits.some((a) => a.b.file === 'docs/payments.md'), 'new file associates against the existing store');
+  ok(associationsForFile(uidx, 'src/charge.js').every((a) => a.b.file !== 'docs/payments.md'),
+    'changed file sheds its stale association (charge.js is about weather now)');
+
+  // 3) the store itself reflects the update: search finds new content, not revoked content
+  const lance = await import('../cli/engine/assoc-lance.mjs');
+  const [wq] = fakeEmbed(['rain sunshine valley weather forecast']);
+  const wHits = await lance.lanceSearch(lanceDir, wq, { k: 3 });
+  ok(wHits[0]?.file === 'src/charge.js', 'search lands on the re-embedded content');
+  ok(wHits.every((h) => h.file !== 'docs/weather.md'), 'revoked vectors are gone from the store');
+  rmSync(udir, { recursive: true, force: true });
 }
 
 rmSync(dir, { recursive: true, force: true });

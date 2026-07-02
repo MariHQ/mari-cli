@@ -48,6 +48,32 @@ export async function lanceSearch(dir, vector, { k = 12, excludeFile = null } = 
   } catch { return []; } // no store yet / unreadable — caller treats as "no matches"
 }
 
+// Revoke every chunk row belonging to the given files (they were deleted or are about to be
+// re-embedded). No-op when the store doesn't exist yet.
+export async function lanceDeleteFiles(dir, files) {
+  if (!files?.length) return;
+  try {
+    const db = await (await lib()).connect(dir);
+    if (!(await db.tableNames()).includes(TABLE)) return;
+    const tbl = await db.openTable(TABLE);
+    const list = files.map((f) => `'${String(f).replace(/'/g, "''")}'`).join(',');
+    await tbl.delete(`file IN (${list})`);
+  } catch { /* nothing to revoke */ }
+}
+
+// Append freshly embedded chunks (incremental update path — lanceWrite overwrites wholesale).
+export async function lanceAdd(dir, chunks, vecs) {
+  const rows = chunks.map((c, i) => ({
+    id: c.file + '#' + c.id, file: c.file, start: c.startLine, end: c.endLine,
+    hash: c._fhash, vector: vecs[i],
+  })).filter((r) => Array.isArray(r.vector) && r.vector.length);
+  if (!rows.length) return 0;
+  const db = await (await lib()).connect(dir);
+  if (!(await db.tableNames()).includes(TABLE)) await db.createTable(TABLE, rows);
+  else (await db.openTable(TABLE)).add(rows);
+  return rows.length;
+}
+
 // Nearest-neighbor recall via Lance: for each chunk, its top-annK neighbors in OTHER files with
 // cosine similarity ≥ cosThreshold. Returns unique cross-file pairs {i, j, cos}.
 export async function lanceRecall(dir, chunks, vecs, { annK = 8, cosThreshold = 0.55 } = {}) {

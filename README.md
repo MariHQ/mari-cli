@@ -363,9 +363,15 @@ npx mari explore "…" --k 20 --json         # more hits, machine-readable
 
 Embeddings retrieve (purpose-built `Qwen3-Embedding-0.6B`, local, CPU-friendly); `--deep` then
 scores each hit with the native attention model — how much of the chunk *genuinely engages* the
-question — which separates true matches from vocabulary coincidence. Everything runs locally;
-`mari explore --build` refreshes the index after big changes, and a changed embedding model
-triggers a clean rebuild automatically.
+question — which separates true matches from vocabulary coincidence. Everything runs locally.
+
+The index maintains itself from git history: it stamps the commit it was built at, and every
+query diffs that against the current tree (`git diff` for committed drift, `git status` for the
+working tree, an existence check for untracked deletions). Deleted files have their vectors and
+associations revoked; changed files are re-embedded — and only if their content hash actually
+moved, so a dirty-but-identical file costs nothing. Non-git repos fall back to a full hash scan.
+`mari assoc update` runs the same sync explicitly; `mari explore --build` forces a full rebuild,
+and a changed embedding model triggers one automatically (mixed vector spaces are never reused).
 
 ## Localized docs (i18n)
 

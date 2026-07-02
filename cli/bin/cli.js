@@ -18,7 +18,7 @@ import { parseFacts, factcheck, factcheckNLI, factcheckDecomposed, factcheckLook
 import { scoreDocument, renderScore } from '../engine/score.mjs';
 import { modelsEnabled, capabilities, machineScore, nliEntail, warmup, warmupGenerative, lookbackGrounding, mlSlopFindings, embed, shutdown } from '../engine/ml/index.mjs';
 import { loadClaimsFile } from '../engine/decompose.mjs';
-import { buildAssoc, loadAssoc, saveAssoc, associationsForFile, assocDir } from '../engine/assoc.mjs';
+import { buildAssoc, updateAssoc, parseGitChanges, loadAssoc, saveAssoc, associationsForFile, assocDir, walkFiles as walkAssocFiles } from '../engine/assoc.mjs';
 import { tmpdir } from 'node:os';
 import { segment } from '../engine/segment.mjs';
 import * as LEX from '../engine/lexicons.mjs';
@@ -1101,11 +1101,63 @@ async function runAssocBuild(root, { useAttn = false } = {}) {
   index.builtAt = new Date().toISOString();
   index.vectorStore = 'lance';
   index.embedModel = capabilities().models.embed; // queries must embed with the same model
+  index.gitHead = gitHeadOf(root); // the tree this index reflects — refresh diffs against it
   saveAssoc(root, index); // index.json only — vectors live in Lance
   return { ...stats, via: index.via };
 }
 
-const ASSOC_USAGE = 'Usage: mari assoc build [--attn] | list [file] [--json] | check <file>';
+// ── index freshness: revoke + re-embed what the git tree says changed ──────────────────────────
+function gitHeadOf(root) {
+  const r = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
+// Candidate changed/deleted files since the index was built. Git-tracked repos get the cheap
+// path: committed drift via `diff --name-status <indexedHead>..HEAD`, working-tree drift via
+// `status --porcelain`. Returns null when git can't answer (no repo, or the indexed head is
+// gone) — the caller falls back to a full hash scan.
+function gitCandidates(root, indexedHead) {
+  const head = gitHeadOf(root);
+  if (!head) return null;
+  let nameStatus = '';
+  if (indexedHead && indexedHead !== head) {
+    const r = spawnSync('git', ['diff', '--name-status', indexedHead, head], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    if (r.status !== 0) return null; // indexed head unknown to this repo — full scan instead
+    nameStatus = r.stdout;
+  }
+  const s = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  return { head, ...parseGitChanges(nameStatus, s.status === 0 ? s.stdout : '') };
+}
+
+// Bring the index in line with the working tree: figure out the candidate change set (git when
+// possible, full hash scan otherwise), revoke + re-embed through updateAssoc, and re-stamp the
+// head. Cheap when nothing changed; never a full re-embed unless everything actually changed.
+async function refreshAssocIndex(root, { quiet = false } = {}) {
+  const idx = loadAssoc(root);
+  if (!idx?.filesMeta) return null; // no index (or a pre-filesMeta one) — caller decides to build
+  // Deleted-while-untracked files are invisible to git (no diff entry, no porcelain line) —
+  // catch them by existence-checking every indexed file. Cheap: one stat per indexed file.
+  const missing = Object.keys(idx.filesMeta).filter((f) => !existsSync(join(root, f)));
+  const g = gitCandidates(root, idx.gitHead);
+  let candidates;
+  if (g && idx.gitHead) {
+    if (g.head === idx.gitHead && !g.modified.length && !g.deleted.length && !missing.length) return { fresh: true };
+    candidates = { modified: g.modified, deleted: [...new Set([...g.deleted, ...missing])] };
+  } else {
+    // No git answer: verify every indexable file by hash instead.
+    candidates = { modified: walkAssocFiles(root), deleted: missing };
+  }
+  const { stats } = await updateAssoc(root, {
+    index: idx, embedFn: (texts) => embed(texts), lanceDir: join(assocDir(root), 'lance'),
+    candidates, onProgress: quiet ? () => {} : (m) => console.error(`  · ${m}`),
+  });
+  idx.gitHead = g?.head ?? gitHeadOf(root);
+  idx.builtAt = new Date().toISOString();
+  saveAssoc(root, idx);
+  return { fresh: stats.modified === 0 && stats.deleted === 0, ...stats };
+}
+
+const ASSOC_USAGE = 'Usage: mari assoc build [--attn] | update | list [file] [--json] | check <file>';
 async function assocCmd() {
   const p = positionals();
   const sub = p[0];
@@ -1116,6 +1168,15 @@ async function assocCmd() {
     if (useAttn && !attnReady()) { console.error('--attn needs the native attention binary + a GGUF model (see native/attn/README.md, or set MARI_ATTN_MODEL).'); process.exit(2); }
     const stats = await runAssocBuild(root, { useAttn });
     console.log(`✓ .mari/assoc — ${stats.associations} associations (via ${stats.via}) from ${stats.chunks} chunks across ${stats.files} files; vectors in Lance.`);
+    return;
+  }
+
+  if (sub === 'update') {
+    if (!capabilities().available) { console.error('mari assoc needs the ML sidecar for embeddings (create .venv, install ml/requirements.txt, or set MARI_PYTHON).'); process.exit(2); }
+    const r = await refreshAssocIndex(root);
+    if (!r) { console.error('No index yet (or one too old to update) — run `mari assoc build` first.'); process.exit(2); }
+    console.log(r.fresh ? '✓ index already reflects the current tree.'
+      : `✓ refreshed — ${r.modified} file(s) re-embedded, ${r.deleted} revoked, ${r.associations} new association(s).`);
     return;
   }
 
@@ -1179,8 +1240,14 @@ async function explore() {
         : '(no vector index yet — building one now; this embeds the whole repo once…)');
     await runAssocBuild(root, { useAttn: false });
     if (!args.length) return;
+  } else {
+    if (!capabilities().available) { console.error('mari explore needs the ML sidecar for embeddings: python3.12 -m venv .venv && .venv/bin/pip install -r ml/requirements.txt (or set MARI_PYTHON).'); process.exit(2); }
+    // Keep the index honest with the working tree: diff against the git head it was built at,
+    // revoke what's gone, re-embed only what actually changed. Free when nothing moved.
+    const r = await refreshAssocIndex(root);
+    if (!r) { console.error('(index predates incremental maintenance — rebuilding…)'); await runAssocBuild(root, { useAttn: false }); }
+    else if (!r.fresh) console.error(`(index refreshed: ${r.modified} file(s) re-embedded, ${r.deleted} revoked)`);
   }
-  if (!capabilities().available) { console.error('mari explore needs the ML sidecar for embeddings: python3.12 -m venv .venv && .venv/bin/pip install -r ml/requirements.txt (or set MARI_PYTHON).'); process.exit(2); }
 
   // A file argument explores FROM that file (its content is the query); free text embeds as-is.
   const isFile = args.length === 1 && existsSync(args[0]) && statSync(args[0]).isFile();
@@ -1414,7 +1481,8 @@ Usage:
   mari surface [dir] [--json]   Print the extracted public API surface (JS/TS, Python, Go, Rust) — the inventory docs are checked against
   mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)
-  mari assoc build [--attn] | list [file] | check <file>   Generic semantic association across all files (embeddings + nearest-neighbor); --attn uses attention for the association step
+  mari assoc build [--attn] | update | list [file] | check <file>   Generic semantic association across all files (embeddings + nearest-neighbor); --attn uses attention for the association step
+                        (update syncs the index with the git tree: revokes deleted files, re-embeds changed ones — explore does this automatically on every query)
   mari explore "<question>" | <file> [--k N] [--deep] [--json] [--build]   RAG search over the repo: embed the query, return the top chunks (file:line + snippet).
                         A file argument finds what relates to that file. --deep reranks hits with attention (~3s each). First run builds the vector index automatically.
   mari live [<file>] [--n=<k>] [--stdin]   Iterate a sentence: show a tighter variant + its flags
