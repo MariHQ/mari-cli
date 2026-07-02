@@ -72,6 +72,49 @@ export const ASSET_TYPES = [
     recommended: [S('Non-goals', 'non goals', 'out of scope', 'scope boundaries'), S('Unresolved Questions', 'open questions', 'open product decisions')],
     tone: ['State Non-goals explicitly — scope is defined by what you exclude.', 'Show the alternatives you considered and why you rejected them.', 'Name the Drawbacks honestly; a proposal with no downsides is unfinished.'],
   },
+  // Community-health docs (GitHub's canonical set). Identified almost entirely by their exact
+  // filename — they live at the repo root, in .github/, or in docs/. Grounded in GitHub's
+  // community-standards checklist, the Contributor Covenant, and GitHub's SECURITY.md convention.
+  {
+    type: 'contributing', label: 'Contributing guide',
+    exact: [/^contributing(\.[a-z-]+)?\.(md|mdx|rst|txt)$/i], file: [],
+    dir: [/(^|\/)\.github(\/|$)/i, /(^|\/)docs\/contributing(\/|$)/i],
+    markers: ['how to contribute', 'ways to contribute', 'getting started', 'development', 'development setup', 'local development', 'building', 'pull request', 'pull requests', 'pull request process', 'submitting changes', 'submitting a pull request', 'reporting bugs', 'reporting issues', 'issues', 'code of conduct', 'style guide', 'coding style', 'coding conventions', 'testing', 'running tests', 'commit messages'],
+    strong: ['pull request process', 'submitting changes', 'submitting a pull request', 'development setup', 'how to contribute', 'ways to contribute'],
+    required: [S('How to Contribute', 'contributing', 'ways to contribute', 'getting started'), S('Development Setup', 'development', 'building', 'local development', 'setup', 'getting started'), S('Pull Request Process', 'pull requests', 'pull request', 'submitting changes', 'submitting a pull request', 'opening a pull request', 'making changes'), S('Reporting Bugs', 'reporting issues', 'bug reports', 'issues', 'filing issues')],
+    recommended: [S('Code of Conduct'), S('Style Guide', 'coding style', 'code style', 'coding conventions'), S('Testing', 'tests', 'running tests')],
+    tone: ['Open with the fastest path to a first contribution.', 'Link the Code of Conduct rather than restating it.', 'Give exact commands for setup, tests, and submitting a PR.'],
+  },
+  {
+    type: 'code-of-conduct', label: 'Code of Conduct',
+    exact: [/^code[-_]?of[-_]?conduct(\.[a-z-]+)?\.(md|mdx|rst|txt)$/i], file: [],
+    dir: [/(^|\/)\.github(\/|$)/i],
+    markers: ['our pledge', 'pledge', 'our standards', 'standards', 'expected behavior', 'unacceptable behavior', 'our responsibilities', 'enforcement', 'enforcement responsibilities', 'enforcement guidelines', 'scope', 'reporting', 'attribution'],
+    strong: ['our pledge', 'our standards', 'enforcement guidelines', 'enforcement responsibilities'],
+    required: [S('Our Pledge', 'pledge'), S('Our Standards', 'standards', 'expected behavior', 'our responsibilities'), S('Enforcement', 'reporting', 'reporting guidelines', 'enforcement responsibilities')],
+    recommended: [S('Scope'), S('Attribution')],
+    tone: ['State the pledge in the first person plural ("We pledge…").', 'Give a real reporting contact, not a placeholder.', 'If you adapt the Contributor Covenant, keep the Attribution.'],
+  },
+  {
+    type: 'governance', label: 'Governance',
+    exact: [/^governance(\.[a-z-]+)?\.(md|mdx|rst|txt)$/i], file: [],
+    dir: [/(^|\/)\.github(\/|$)/i, /(^|\/)docs\/governance(\/|$)/i],
+    markers: ['roles', 'roles and responsibilities', 'project roles', 'responsibilities', 'decision making', 'decision-making', 'decision-making process', 'how decisions are made', 'maintainers', 'becoming a maintainer', 'becoming a committer', 'committers', 'contributors', 'meetings', 'voting', 'code of conduct', 'amendments', 'changing this document'],
+    strong: ['decision-making process', 'becoming a maintainer', 'becoming a committer', 'roles and responsibilities'],
+    required: [S('Roles', 'roles and responsibilities', 'project roles', 'responsibilities'), S('Decision Making', 'decision-making', 'decision-making process', 'decisions', 'how decisions are made'), S('Maintainers', 'becoming a maintainer', 'becoming a committer', 'committers')],
+    recommended: [S('Meetings'), S('Code of Conduct'), S('Changing This Document', 'amendments', 'changing the governance')],
+    tone: ['Define each role by its concrete rights and duties, not just a title.', 'Make the path from contributor to maintainer explicit and measurable.', 'Say how the governance document itself gets amended.'],
+  },
+  {
+    type: 'security', label: 'Security policy',
+    exact: [/^security(\.[a-z-]+)?\.(md|mdx|rst|txt)$/i], file: [],
+    dir: [/(^|\/)\.github(\/|$)/i, /(^|\/)docs\/security(\/|$)/i],
+    markers: ['supported versions', 'supported version', 'reporting a vulnerability', 'reporting security issues', 'reporting a security issue', 'report a vulnerability', 'how to report', 'disclosure', 'disclosure policy', 'coordinated disclosure', 'responsible disclosure', 'security updates', 'response', 'scope', 'safe harbor', 'preferred languages'],
+    strong: ['supported versions', 'reporting a vulnerability', 'coordinated disclosure', 'disclosure policy'],
+    required: [S('Supported Versions', 'supported version', 'affected versions'), S('Reporting a Vulnerability', 'reporting security issues', 'reporting a security issue', 'report a vulnerability', 'how to report')],
+    recommended: [S('Disclosure Policy', 'disclosure', 'coordinated disclosure', 'responsible disclosure'), S('Security Update Policy', 'security updates', 'response')],
+    tone: ['Give a private reporting channel — never "just open an issue".', 'State a response-time expectation you can actually meet.', 'List exactly which versions receive security fixes.'],
+  },
 ];
 
 const byType = Object.fromEntries(ASSET_TYPES.map((a) => [a.type, a]));
@@ -101,7 +144,10 @@ export function detectAssetType(path, text, headings) {
   for (const a of ASSET_TYPES) {
     let score = 0; const signals = []; let qualified = false;
     if (a.dir.some((re) => re.test(rel))) { score += 3; signals.push('directory'); qualified = true; }
-    if (a.file.some((re) => re.test(base))) {
+    // A canonical, unambiguous filename (CONTRIBUTING.md, SECURITY.md, …) is enough on its own —
+    // these community-health docs live by their exact name, wherever they sit in the tree.
+    if (a.exact && a.exact.some((re) => re.test(base))) { score += 4; signals.push('canonical filename'); qualified = true; }
+    if ((a.file || []).some((re) => re.test(base))) {
       // a bare NNNN-*.md / date filename is only a weak, ambiguous signal
       const weak = /^\d{1,8}[-_].+\.(md|mdx)$/i.test(base) && !/(adr|rfc|rfd|runbook|playbook|postmortem|design|proposal)/i.test(base);
       score += weak ? 1 : 3; signals.push('filename'); if (!weak) qualified = true;
@@ -290,6 +336,115 @@ Why might we *not* do this? The honest costs and risks.
 ## Unresolved Questions
 
 What's still open and needs to be decided.
+`,
+  contributing: (t) => `# Contributing to ${t || '<project>'}
+
+Thanks for contributing! This guide gets you from clone to merged PR.
+
+## How to Contribute
+
+The quickest ways to help: fix a bug, improve docs, or pick up a \`good first issue\`.
+By participating you agree to our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Development Setup
+
+\`\`\`bash
+git clone <repo> && cd <project>
+<install deps>
+<run the app / tests>
+\`\`\`
+
+## Pull Request Process
+
+1. Fork and branch from \`main\`.
+2. Make your change, with tests and updated docs.
+3. Ensure the test suite and linters pass.
+4. Open a PR describing the what and the why; link any related issue.
+
+## Reporting Bugs
+
+Open an issue with steps to reproduce, expected vs. actual behavior, and your environment.
+Search existing issues first to avoid duplicates.
+`,
+  'code-of-conduct': (t) => `# Contributor Covenant Code of Conduct
+
+## Our Pledge
+
+We as members, contributors, and leaders pledge to make participation in ${t || 'our project'}
+a harassment-free experience for everyone.
+
+## Our Standards
+
+Examples of behavior that contributes to a positive environment:
+
+- Demonstrating empathy and kindness toward other people.
+- Being respectful of differing opinions, viewpoints, and experiences.
+- Giving and gracefully accepting constructive feedback.
+
+Unacceptable behavior includes harassment, insults, and other unprofessional conduct.
+
+## Enforcement
+
+Report abusive, harassing, or otherwise unacceptable behavior to <contact>. All complaints
+will be reviewed and investigated promptly and fairly.
+
+## Scope
+
+This Code of Conduct applies within all community spaces and when an individual is
+representing the project in public spaces.
+
+## Attribution
+
+Adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.
+`,
+  governance: (t) => `# ${t || '<project>'} Governance
+
+## Roles
+
+- **Contributors** — anyone who submits issues or pull requests.
+- **Maintainers** — trusted contributors with merge rights and release duties.
+
+Describe the concrete rights and responsibilities of each role.
+
+## Decision Making
+
+How decisions are made — lazy consensus by default; describe when a vote is required and
+what threshold carries it.
+
+## Maintainers
+
+How a contributor becomes a maintainer (the measurable bar), and how maintainers step down
+or are removed.
+
+## Meetings
+
+When the project meets, where notes live, and how to add an agenda item.
+
+## Changing This Document
+
+How this governance document itself is amended.
+`,
+  security: (t) => `# Security Policy${t ? ` — ${t}` : ''}
+
+## Supported Versions
+
+| Version | Supported |
+|---------|-----------|
+| latest  | ✅        |
+| older   | ❌        |
+
+## Reporting a Vulnerability
+
+**Do not open a public issue for security problems.** Report privately via <security contact>
+(or GitHub's private "Report a vulnerability" advisory). Include steps to reproduce and impact.
+
+We aim to acknowledge reports within <N business days> and to keep you updated as we
+investigate and ship a fix.
+
+## Disclosure Policy
+
+We follow coordinated disclosure: we'll agree a disclosure timeline with you and credit you
+in the advisory unless you prefer otherwise.
 `,
 };
 export function scaffold(type, title) {

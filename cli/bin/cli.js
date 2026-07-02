@@ -631,7 +631,8 @@ function live() {
   console.log('\nPick one with --n=<k>. For bolder/quieter rewrites, run /mari live (agent-driven).');
 }
 
-// Developer-asset awareness: detect a doc's archetype (runbook/ADR/postmortem/RFC), validate
+// Developer-asset awareness: detect a doc's archetype (runbook/ADR/postmortem/RFC + community
+// docs: contributing/code-of-conduct/governance/security), validate
 // its canonical structure, or scaffold a best-practice template. Used by the skill to apply
 // type-specific handling by default. Structure checks warn (drafts legitimately lack sections).
 function asset() {
@@ -664,6 +665,7 @@ function asset() {
     const miss = findings.filter((f) => f.severity === 'warn').length;
     console.log(`\n${miss} required section(s) missing · ${findings.length - miss} other note(s)`);
     process.exitCode = flag("strict") && miss > 0 ? 1 : 0;
+    return;
   }
   console.error(`Usage: mari asset detect <file> | check <file> | scaffold <${types}> [title]`); process.exit(2);
 }
@@ -1118,7 +1120,7 @@ Usage:
   mari update             Refresh the installed skill + hooks from this repo
   mari hooks status | on | off | reset | ignore-rule <id> | ignore-file <glob> | ignore-value <rule> <value> [--reason "…"]
   mari rules list | discover | add <name> --paths "<glob[,…]>" --notify "<message>" [--exclude "<glob>"] | remove <name>   Notify the agent on matching edits (e.g. update API docs)
-  mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC) detection, structure check, scaffold
+  mari asset detect <file> | check <file> | scaffold <type> [title]   Developer-asset (runbook/ADR/postmortem/RFC, contributing/code-of-conduct/governance/security) detection, structure check, scaffold
   mari platform detect | list | scaffold <name> [--name "<title>"] [--force]   Set up a docs-as-code site generator (MkDocs, Docusaurus, Sphinx, …) if none exists
   mari i18n <file> | conform <file|dir>   List a doc's translations, or check they share the source's structure (dir = one-pass sweep)
   mari i18n coverage <source> [translation]   Flag source passages the translation barely covers (needs native/attn + a GGUF model)

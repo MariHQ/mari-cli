@@ -25,6 +25,22 @@ check('runbook detected by filename', typeOf('restart-runbook.md', rbText) === '
 const rfcText = '# RFC: Thing\n## Summary\nx\n## Motivation\ny\n## Non-goals\nz\n## Alternatives\nw\n## Drawbacks\nv';
 check('RFC detected by content', typeOf('docs/design/thing.md', rfcText) === 'rfc', `(${typeOf('docs/design/thing.md', rfcText)})`);
 
+// --- community-health docs: detected by their canonical filename, anywhere in the tree ---
+check('CONTRIBUTING.md detected by canonical name alone', typeOf('CONTRIBUTING.md', '# Contributing\n\nThanks for helping out.') === 'contributing', `(${typeOf('CONTRIBUTING.md', '# Contributing\n\nThanks.')})`);
+check('.github/CONTRIBUTING.md detected', typeOf('.github/CONTRIBUTING.md', '# Contributing') === 'contributing');
+check('CODE_OF_CONDUCT.md detected', typeOf('CODE_OF_CONDUCT.md', '# Code of Conduct\n## Our Pledge\nx') === 'code-of-conduct', `(${typeOf('CODE_OF_CONDUCT.md', '# Code of Conduct')})`);
+check('GOVERNANCE.md detected', typeOf('GOVERNANCE.md', '# Governance\n## Roles\nx') === 'governance', `(${typeOf('GOVERNANCE.md', '# Governance')})`);
+check('SECURITY.md detected', typeOf('SECURITY.md', '# Security Policy\n## Reporting a Vulnerability\nx') === 'security', `(${typeOf('SECURITY.md', '# Security')})`);
+check('docs/security.md detected', typeOf('docs/security.md', '# Security\n## Supported Versions\nx') === 'security');
+// a filename that merely starts with "security" is NOT the policy (a guide, not SECURITY.md)
+check('security-guide.md is not auto-classified by name', typeOf('security-guide.md', '# Security guide\n\nHow to lock things down.') === null, `(${typeOf('security-guide.md', '# Security guide\n\ntext.')})`);
+// CONTRIBUTING that links a Code of Conduct is still a contributing guide, not a CoC
+check('CONTRIBUTING mentioning code of conduct stays contributing', typeOf('CONTRIBUTING.md', '# Contributing\n## How to Contribute\nx\n## Code of Conduct\nSee CODE_OF_CONDUCT.md') === 'contributing');
+
+// structure validation: an incomplete SECURITY.md warns on the missing required section
+const incompleteSec = validateAsset(segment('# Security Policy\n## Supported Versions\n| latest | yes |'), 'security');
+check('security missing Reporting a Vulnerability warns', incompleteSec.some((f) => f.severity === 'warn' && /Reporting a Vulnerability/.test(f.message)));
+
 // --- non-assets are not misclassified ---
 check('a plain README is not an asset', detect('README.md', '# My Project\n\nInstall it and go.') === null);
 check('a doc with one generic heading is not an asset', detect('guide.md', '# Guide\n## Overview\ntext') === null);
